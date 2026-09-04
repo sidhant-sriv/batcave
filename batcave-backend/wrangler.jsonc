@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "batcave-backend",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "batcave-db",
+      "database_id": "43c4d147-b426-4ac3-859f-d2daaeae1b5f",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "GROQ_MODEL": "qwen/qwen3.8-27b"
+  }
+}
