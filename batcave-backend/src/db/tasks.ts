@@ -1,4 +1,5 @@
 import type { Task } from '../types/task';
+import { ERRORS } from '../errors';
 
 /**
  * D1 access for the tasks table. This is the only place that talks to the
@@ -25,7 +26,7 @@ export async function insertTask(db: D1Database, task: Task): Promise<Task> {
     .first<Task>();
 
   if (!row) {
-    throw new Error('Insert did not return the created task');
+    throw new Error(ERRORS.TASK_INSERT_NO_ROW);
   }
 
   return row;

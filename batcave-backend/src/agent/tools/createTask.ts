@@ -1,4 +1,5 @@
 import { createTaskSchema } from '../../schemas/task';
+import { ERRORS } from '../../errors';
 import { TaskValidationError, type TaskService } from '../../services/taskService';
 import { TASK_PRIORITIES } from '../../types/task';
 import type { Task } from '../../types/task';
@@ -55,14 +56,14 @@ export async function runCreateTaskTool(
   try {
     parsedJson = JSON.parse(rawArguments);
   } catch {
-    throw new TaskValidationError('Model returned malformed tool arguments', [
-      { message: 'tool arguments were not valid JSON' },
+    throw new TaskValidationError(ERRORS.MODEL_TOOL_ARGS_MALFORMED, [
+      { message: ERRORS.MODEL_TOOL_ARGS_NOT_JSON },
     ]);
   }
 
   const parsed = createTaskSchema.safeParse(parsedJson);
   if (!parsed.success) {
-    throw new TaskValidationError('Model returned invalid task arguments', parsed.error.issues);
+    throw new TaskValidationError(ERRORS.MODEL_TASK_ARGS_INVALID, parsed.error.issues);
   }
 
   return taskService.create(parsed.data);

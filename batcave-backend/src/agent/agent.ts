@@ -1,4 +1,5 @@
 import type { TaskService } from '../services/taskService';
+import { ERROR_TEMPLATES } from '../errors';
 import type { Task } from '../types/task';
 import { CREATE_TASK_TOOL_NAME, createTaskTool, runCreateTaskTool } from './tools/createTask';
 
@@ -71,12 +72,12 @@ export async function runAgent(
       }),
     });
   } catch (error) {
-    throw new GroqError(`Could not reach Groq: ${(error as Error).message}`, 502);
+    throw new GroqError(ERROR_TEMPLATES.groqUnreachable((error as Error).message), 502);
   }
 
   if (!response.ok) {
     const body = await response.text();
-    throw new GroqError(`Groq returned ${response.status}: ${body.slice(0, 500)}`, 502);
+    throw new GroqError(ERROR_TEMPLATES.groqBadResponse(response.status, body), 502);
   }
 
   const data = (await response.json()) as GroqResponse;

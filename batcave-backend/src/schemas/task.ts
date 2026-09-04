@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ERRORS } from '../errors';
 import { TASK_PRIORITIES, TASK_STATUSES } from '../types/task';
 
 /**
@@ -16,7 +17,7 @@ const optionalText = (max: number) =>
 /** Optional `YYYY-MM-DD` date, the format we store due dates in. */
 const dueDate = optionalText(10).refine(
   (value) => value === null || /^\d{4}-\d{2}-\d{2}$/.test(value),
-  'due_date must be a YYYY-MM-DD date',
+  ERRORS.TASK_DUE_DATE_FORMAT,
 );
 
 export const taskStatusSchema = z.enum(TASK_STATUSES);
@@ -27,7 +28,7 @@ export const taskPrioritySchema = z.enum(TASK_PRIORITIES);
  * agent validate against this before anything reaches D1.
  */
 export const createTaskSchema = z.object({
-  title: z.string().trim().min(1, 'title is required').max(200),
+  title: z.string().trim().min(1, ERRORS.TASK_TITLE_REQUIRED).max(200),
   description: optionalText(2000),
   priority: taskPrioritySchema.default('medium'),
   due_date: dueDate,
