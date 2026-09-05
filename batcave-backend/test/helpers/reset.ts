@@ -11,5 +11,7 @@ export async function resetDb(): Promise<void> {
     env.DB.prepare('DELETE FROM agent_runs'),
     env.DB.prepare('DELETE FROM writes'),
     env.DB.prepare('DELETE FROM checkpoints'),
+    env.DB.prepare('DELETE FROM chat_threads'),
+    env.DB.prepare('DELETE FROM chats'),
   ]);
 }

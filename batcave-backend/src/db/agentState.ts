@@ -126,3 +126,43 @@ export async function pruneThread(db: D1Database, threadId: string, keep: number
       .bind(threadId, threadId, keep),
   ]);
 }
+
+/**
+ * Everything a thread left behind. The checkpointer's two tables have no
+ * foreign key back to `chats`, because that schema is the saver's and was
+ * copied verbatim, so a deleted conversation has to clear them by hand.
+ */
+export async function deleteThread(db: D1Database, threadId: string): Promise<void> {
+  await db.batch([
+    db.prepare('DELETE FROM writes WHERE thread_id = ?').bind(threadId),
+    db.prepare('DELETE FROM checkpoints WHERE thread_id = ?').bind(threadId),
+    db.prepare('DELETE FROM agent_runs WHERE thread_id = ?').bind(threadId),
+  ]);
+}
+
+/**
+ * A run still believed to be in flight on any of these threads. Deleting a
+ * conversation out from under a running turn would leave the graph writing
+ * checkpoints nothing can reach, so the caller refuses rather than racing it.
+ */
+export async function selectLiveRun(
+  db: D1Database,
+  threadIds: string[],
+  staleBefore: number,
+): Promise<AgentRunRow | null> {
+  if (threadIds.length === 0) return null;
+
+  const placeholders = threadIds.map(() => '?').join(', ');
+  const row = await db
+    .prepare(
+      `SELECT * FROM agent_runs
+        WHERE thread_id IN (${placeholders})
+          AND status = 'running'
+          AND started_at > ?
+        LIMIT 1`,
+    )
+    .bind(...threadIds, staleBefore)
+    .first<AgentRunRow>();
+
+  return row ?? null;
+}

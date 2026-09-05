@@ -1,18 +1,7 @@
 import { z } from 'zod';
 import { ERRORS } from '../errors';
 import { TASK_PRIORITIES, TASK_STATUSES } from '../types/task';
-
-/**
- * Optional free text. Models routinely emit "" for fields they have nothing
- * for, so a blank value is normalised to null rather than stored as empty.
- */
-const optionalText = (max: number) =>
-  z
-    .string()
-    .trim()
-    .max(max)
-    .nullish()
-    .transform((value) => (value ? value : null));
+import { clearableText, optionalText } from './fields';
 
 const DUE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -21,20 +10,6 @@ const dueDate = optionalText(10).refine(
   (value) => value === null || DUE_DATE_PATTERN.test(value),
   ERRORS.TASK_DUE_DATE_FORMAT,
 );
-
-/**
- * Tri-state field for updates: absent leaves the column alone, null or "" 
- * clears it. `optionalText` cannot be reused here because it collapses
- * undefined to null, which would wipe the field on every unrelated change.
- */
-const clearableText = (max: number) =>
-  z
-    .string()
-    .trim()
-    .max(max)
-    .nullable()
-    .optional()
-    .transform((value) => (value === undefined ? undefined : value ? value : null));
 
 const clearableDueDate = clearableText(10).refine(
   (value) => value === undefined || value === null || DUE_DATE_PATTERN.test(value),

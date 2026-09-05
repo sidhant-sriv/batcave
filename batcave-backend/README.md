@@ -29,15 +29,23 @@ are produced in exactly one place. The model never touches D1: it proposes tool
 arguments, which are validated by the same Zod schemas the REST routes use.
 
 ```
-REST      ──► Zod ─────────────────────────┐
+REST       ──► Zod ────────────────────────┐
                                            ├─► TaskService ─► db/tasks.ts ─► D1 (tasks)
-chat ─► ChatGroq ─► tool call ─► Zod ──────┘
-             └───► CloudflareD1Saver ──────────────────────► D1 (checkpoints, writes)
-             └───► agent_runs claim ────────────────────────► D1 (agent_runs)
+chats ─► ChatGroq ─► tool call ─► Zod ─────┘
+  │           └───► CloudflareD1Saver ─────────────────────► D1 (checkpoints, writes)
+  │           └───► agent_runs claim ───────────────────────► D1 (agent_runs)
+  └───► ChatService ─────────────────────► db/chats.ts ────► D1 (chats, chat_threads)
 ```
 
 The checkpointer is the one exception to "`db/tasks.ts` is the only file that
 speaks SQL": it owns its own two tables, whose schema lives in migration `0002`.
+
+A **chat** is the conversation a client holds a handle to; a **thread** is the
+LangGraph checkpoint partition it runs on. `chat_threads` maps one to the other,
+one row per chat today. They are kept apart so that compaction can move a chat
+onto a fresh thread without the client's handle changing, and so ownership has
+somewhere to live when auth arrives. `ChatService` is the only thing that knows
+which thread a chat is on; callers deal in chat ids.
 
 ```
 src/
@@ -46,7 +54,7 @@ src/
 ├── routes/
 │   ├── tasks.ts                   REST: POST, GET (filtered), GET /:id, PATCH
 │   ├── searchParams.ts            query-string bag to filter object
-│   └── chat.ts                    POST /api/chat: threads, claims, takeover
+│   └── chat.ts                    /api/chats: turns, claims, takeover, history
 ├── agent/
 │   ├── agent.ts                   buildAgent(env), recursion limit, thread config
 │   ├── model.ts                   ChatGroq construction
@@ -63,16 +71,23 @@ src/
 │   │   ├── escalate.ts            infrastructure errors leave the graph
 │   │   └── sequentialToolCalls.ts parallel_tool_calls: false
 │   └── tools/                     create_task, search_tasks, update_task
-├── services/taskService.ts        Single source of truth for reads and writes
+├── services/
+│   ├── taskService.ts             Single source of truth for reads and writes
+│   └── chatService.ts             Conversations: chats, their threads, history
 ├── db/
 │   ├── tasks.ts                   Task SQL, including buildSearchQuery()
-│   └── agentState.ts              agent_runs SQL, checkpoint pruning
-├── schemas/task.ts                Zod schemas shared by REST and the tools
+│   ├── chats.ts                   chats and chat_threads SQL
+│   └── agentState.ts              agent_runs SQL, pruning, thread deletion
+├── schemas/
+│   ├── fields.ts                  optionalText, clearableText
+│   ├── task.ts                    Zod schemas shared by REST and the tools
+│   └── chat.ts                    chat id, rename, list options
 └── types/task.ts                  Task model, status/priority, Env
 
 migrations/
 ├── 0001_create_tasks.sql
-└── 0002_agent_state.sql           checkpoints, writes, agent_runs
+├── 0002_agent_state.sql           checkpoints, writes, agent_runs
+└── 0003_chats.sql                 chats, chat_threads, backfill from agent_runs
 ```
 
 ## Setup
@@ -154,54 +169,70 @@ curl -X PATCH http://localhost:8787/api/tasks/$ID \
 
 `200` with `{ "task": { ... } }`, or `404` if the id is not there.
 
-### `POST /api/chat`
+### `POST /api/chats`
+
+Starts a conversation. Send a message with it to run the first turn in the same
+request, or send nothing to open an empty one:
 
 ```sh
-curl -X POST http://localhost:8787/api/chat \
+curl -X POST http://localhost:8787/api/chats \
   -H 'Content-Type: application/json' \
   -d '{"message": "Create a high priority task to finish the backend by Friday."}'
 ```
 
 ```json
 {
-  "thread_id": "0199...",
+  "chat": {
+    "id": "01a0...",
+    "title": "Create a high priority task to finish the backend by Fri...",
+    "turn_count": 1,
+    "created_at": "2026-09-05T12:15:10.291Z",
+    "last_message_at": "2026-09-05T12:15:12.702Z"
+  },
   "reply": "Added \"Finish the backend\", due 11 September, at high priority.",
   "actions": [{ "tool": "create_task", "ok": true, "task": { "...": "..." } }]
 }
 ```
 
-Send `thread_id` back on the next request to continue the conversation; omit it
-to start a new one. History lives in D1, so the client holds nothing but the id:
+`201` either way. Without a message the body is just `{ "chat": { ... } }`. A
+chat names itself after its first message and counts turns as they are answered;
+both are server-owned, and the id is server-minted — a client cannot choose one.
+
+### `POST /api/chats/:chat_id/messages`
+
+Continues the conversation. History lives in D1, so the client holds nothing but
+the id:
 
 ```sh
-curl -X POST http://localhost:8787/api/chat \
+curl -X POST http://localhost:8787/api/chats/01a0.../messages \
   -H 'Content-Type: application/json' \
-  -d '{"message": "Mark the first one as done", "thread_id": "0199..."}'
+  -d '{"message": "Mark the first one as done"}'
 ```
 
-`actions` is what actually ran, so a UI can render created and updated tasks
-without parsing the prose. `reply` is the assistant's text, or `null` if it only
-called tools.
+`200` with the same body as above. `actions` is what actually ran, so a UI can
+render created and updated tasks without parsing the prose. `reply` is the
+assistant's text, or `null` if it only called tools. `404` if the chat is not
+there — an unknown id is never created on the way past.
 
 **`Idempotency-Key`.** Send one and a retry of the same turn returns the stored
 response instead of running it again. Without the header the key is derived from
-the thread's state plus the message, which covers an honest retry but is not
-exact — send the header if the client retries on timeouts.
+the conversation's state plus the message, which covers an honest retry but is
+not exact — send the header if the client retries on timeouts.
 
-Only one turn runs on a thread at a time; a second concurrent request gets
+Only one turn runs on a conversation at a time; a second concurrent request gets
 `409`.
 
-### `GET /api/chat/:thread_id`
+### `GET /api/chats/:chat_id`
 
 The conversation so far, as turns:
 
 ```sh
-curl http://localhost:8787/api/chat/0199...
+curl http://localhost:8787/api/chats/01a0...
 ```
 
 ```json
 {
-  "thread_id": "0199...",
+  "chat": { "id": "01a0...", "title": "Renew the domain", "turn_count": 1, "...": "..." },
   "turns": [
     {
       "message": "Add a task to renew the domain by Friday",
@@ -212,10 +243,10 @@ curl http://localhost:8787/api/chat/0199...
 }
 ```
 
-Each turn has the same shape as a `POST /api/chat` response, so a client can
-render replayed history and a live reply with one code path. It reads the
-checkpoint directly: no run is claimed, the model is never called, and a thread
-whose last turn failed still reads back. `404` if the thread has no checkpoint.
+Each turn has the same shape as a turn response, so a client can render replayed
+history and a live reply with one code path. It reads the checkpoint directly:
+no run is claimed, the model is never called, and a conversation whose last turn
+failed still reads back. `404` if the chat is not there.
 
 ### `GET /health`
 
@@ -228,8 +259,8 @@ whose last turn failed still reads back. `404` if the thread has no checkpoint.
 | Status | Meaning                                                           |
 | ------ | ----------------------------------------------------------------- |
 | 400    | Malformed JSON, or Zod validation failed (`issues` included)       |
-| 404    | Unknown route, an unknown task id, or an unknown `thread_id`       |
-| 409    | Another turn is already running on this `thread_id`                |
+| 404    | Unknown route, an unknown task id, or an unknown `chat_id`         |
+| 409    | Another turn is already running on this conversation               |
 | 500    | `GROQ_API_KEY` unset, or an unexpected failure                     |
 | 502    | Groq unreachable or returned an error                              |
 | 503    | A tool could not reach the database; the turn is resumable         |

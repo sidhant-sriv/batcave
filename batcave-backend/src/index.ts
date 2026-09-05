@@ -2,8 +2,9 @@ import { Hono, type ErrorHandler } from 'hono';
 import { findInfrastructureError } from './agent/middleware/escalate';
 import { classifyModelError } from './agent/modelErrors';
 import { ERRORS } from './errors';
-import { chatRoute } from './routes/chat';
+import { chatsRoute } from './routes/chat';
 import { tasksRoute } from './routes/tasks';
+import { ChatBusyError, ChatNotFoundError, ChatValidationError } from './services/chatService';
 import { TaskNotFoundError, TaskValidationError } from './services/taskService';
 import type { Env } from './types/task';
 
@@ -12,7 +13,7 @@ const app = new Hono<{ Bindings: Env }>();
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
 app.route('/api/tasks', tasksRoute);
-app.route('/api/chat', chatRoute);
+app.route('/api/chats', chatsRoute);
 
 app.notFound((c) => c.json({ error: ERRORS.NOT_FOUND }, 404));
 
@@ -28,6 +29,15 @@ export const onError: ErrorHandler<{ Bindings: Env }> = (error, c) => {
   }
   if (error instanceof TaskNotFoundError) {
     return c.json({ error: error.message }, 404);
+  }
+  if (error instanceof ChatValidationError) {
+    return c.json({ error: error.message, issues: error.issues }, 400);
+  }
+  if (error instanceof ChatNotFoundError) {
+    return c.json({ error: error.message }, 404);
+  }
+  if (error instanceof ChatBusyError) {
+    return c.json({ error: error.message }, 409);
   }
 
   const infrastructure = findInfrastructureError(error);

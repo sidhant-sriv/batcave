@@ -3,10 +3,11 @@ import { Hono } from 'hono';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ERRORS } from '../src/errors';
 import { onError } from '../src/index';
-import { createChatRoute, type ChatResponse } from '../src/routes/chat';
+import { createChatRoute } from '../src/routes/chat';
 import { insertTask } from '../src/db/tasks';
 import { TaskService } from '../src/services/taskService';
 import type { Env, Task } from '../src/types/task';
+import { send, startChat } from './helpers/chat';
 import { resetDb } from './helpers/reset';
 import { ScriptedModel, type ScriptStep } from './helpers/scriptedModel';
 
@@ -20,27 +21,14 @@ beforeEach(resetDb);
 function appWith(script: ScriptStep[]) {
   const model = new ScriptedModel(script);
   const app = new Hono<{ Bindings: Env }>();
-  app.route('/api/chat', createChatRoute({ model }));
+  app.route('/api/chats', createChatRoute({ model }));
   app.onError(onError);
   return { app, model };
 }
 
-async function chat(
-  app: Hono<{ Bindings: Env }>,
-  message: string,
-  threadId?: string,
-  headers: Record<string, string> = {},
-): Promise<{ status: number; body: ChatResponse & { error?: string } }> {
-  const response = await app.request(
-    '/api/chat',
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...headers },
-      body: JSON.stringify({ message, ...(threadId ? { thread_id: threadId } : {}) }),
-    },
-    env,
-  );
-  return { status: response.status, body: (await response.json()) as ChatResponse };
+/** Starts a fresh conversation unless one is handed in to continue. */
+async function chat(app: Hono<{ Bindings: Env }>, message: string, chatId?: string) {
+  return send(app, chatId ?? (await startChat()).chatId, message);
 }
 
 const seed = (row: Partial<Task> & { title: string }) =>
@@ -63,7 +51,7 @@ describe('the loop', () => {
     expect(status).toBe(200);
     expect(body.reply).toBe('Cloudflare is a CDN, among other things.');
     expect(body.actions).toEqual([]);
-    expect(body.thread_id).toBeTruthy();
+    expect(body.chat.id).toBeTruthy();
   });
 
   it('creates a task and reports it as an action', async () => {
@@ -118,7 +106,7 @@ describe('the loop', () => {
     ]);
 
     const first = await chat(app, 'Show me my backend tasks');
-    const second = await chat(app, 'Mark the first one as done', first.body.thread_id);
+    const second = await chat(app, 'Mark the first one as done', first.body.chat.id);
 
     expect(second.body.actions).toEqual([
       expect.objectContaining({ tool: 'update_task', ok: true }),
