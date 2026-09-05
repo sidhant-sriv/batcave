@@ -7,7 +7,7 @@ import { CHECKPOINTS_KEPT, claim, complete, fail, runKey } from '../agent/runs';
 import { pruneThread } from '../db/agentState';
 import type { ChatRow } from '../db/chats';
 import { ERRORS } from '../errors';
-import { createChatSchema, sendMessageSchema } from '../schemas/chat';
+import { createChatSchema, renameChatSchema, sendMessageSchema } from '../schemas/chat';
 import { ChatService } from '../services/chatService';
 import type { Env } from '../types/task';
 
@@ -222,6 +222,44 @@ export function createChatRoute(options: AgentOptions = {}) {
     const turns = await chats.history(chatId);
 
     return c.json({ chat, turns } satisfies ChatHistoryResponse);
+  });
+
+  /**
+   * Conversations, newest first. Metadata only: including turns would mean
+   * decoding one checkpoint blob per chat, which is what the denormalised
+   * `turn_count` exists to avoid.
+   */
+  chatsRoute.get('/', async (c) => {
+    const chats = new ChatService(c.env.DB);
+    const { chats: rows, truncated } = await chats.list({ limit: c.req.query('limit') });
+
+    return c.json({ chats: rows, truncated });
+  });
+
+  /** Renames a conversation. `{"title": null}` puts it back to untitled. */
+  chatsRoute.patch('/:chat_id', async (c) => {
+    const body = await readJson(c);
+    if (!body.ok) return c.json({ error: ERRORS.INVALID_JSON_BODY }, 400);
+
+    const parsed = renameChatSchema.safeParse(body.body);
+    if (!parsed.success) {
+      return c.json({ error: ERRORS.INVALID_CHAT_UPDATE, issues: parsed.error.issues }, 400);
+    }
+
+    const chats = new ChatService(c.env.DB);
+    const chat = await chats.rename(c.req.param('chat_id'), parsed.data);
+
+    return c.json({ chat });
+  });
+
+  /**
+   * Discards a conversation and everything the agent stored for it. Refused
+   * with 409 while a turn is still running, rather than leaving the graph
+   * writing checkpoints that nothing points at.
+   */
+  chatsRoute.delete('/:chat_id', async (c) => {
+    await new ChatService(c.env.DB).remove(c.req.param('chat_id'));
+    return c.body(null, 204);
   });
 
   return chatsRoute;

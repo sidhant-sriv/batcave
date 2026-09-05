@@ -1,0 +1,189 @@
+/*
+ * Tailwind v4 mapping.
+ *
+ * `@theme inline` is load-bearing: it keeps the `var()` reference intact in the
+ * generated utility instead of resolving it to a literal at build time. Without
+ * `inline`, `[data-theme='day']` would change the custom properties and every
+ * utility would keep painting the night value.
+ *
+ * Only TIER 2 and TIER 3 tokens are mapped. A TIER 1 primitive must never
+ * become a Tailwind utility — the moment `bg-ink-4` exists, the tier boundary
+ * is gone and theming stops being a single-file change.
+ */
+
+@import 'tailwindcss';
+@import './tokens.css';
+
+/*
+ * `layer(base)` is load-bearing, not tidiness.
+ *
+ * Tailwind emits utilities into the `utilities` cascade layer. Unlayered CSS
+ * beats every layered rule regardless of specificity, so importing this reset
+ * plainly would put `*{padding:0}` and `button{border:none}` above every
+ * `px-*` and `border-*` utility in the app — silently zeroing them. Declaring
+ * it as part of `base` puts it back underneath, where a reset belongs.
+ */
+@import './base.css' layer(base);
+
+/* Dark-mode variants key off the attribute, not the media query — the theme is
+ * an explicit choice stored in localStorage and stamped before first paint. */
+@custom-variant day (&:where([data-theme='day'] *));
+
+@theme inline {
+  /* --- Surfaces ------------------------------------------------------- */
+  --color-app: var(--surface-app);
+  --color-panel: var(--surface-panel);
+  --color-raised: var(--surface-raised);
+  --color-well: var(--surface-well);
+  --color-modal: var(--surface-modal);
+  --color-scrim: var(--surface-scrim);
+  --color-hover: var(--surface-hover);
+  --color-selected: var(--surface-selected);
+
+  /* --- Borders -------------------------------------------------------- */
+  --color-hairline: var(--border-hairline);
+  --color-divider: var(--border-divider);
+  --color-control: var(--border-control);
+  --color-strong: var(--border-strong);
+  --color-focus: var(--border-focus);
+
+  /* --- Text ----------------------------------------------------------- */
+  --color-primary: var(--text-primary);
+  --color-secondary: var(--text-secondary);
+  --color-muted: var(--text-muted);
+  --color-disabled: var(--text-disabled);
+  --color-inverted: var(--text-inverted);
+  --color-on-accent: var(--text-on-accent);
+  --color-link: var(--text-link);
+
+  /* --- Accent --------------------------------------------------------- */
+  --color-accent: var(--accent-base);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-border: var(--accent-border);
+
+  /* --- Task status ---------------------------------------------------- */
+  --color-todo-fg: var(--status-todo-fg);
+  --color-todo-bg: var(--status-todo-bg);
+  --color-todo-border: var(--status-todo-border);
+  --color-progress-fg: var(--status-progress-fg);
+  --color-progress-bg: var(--status-progress-bg);
+  --color-progress-border: var(--status-progress-border);
+  --color-done-fg: var(--status-done-fg);
+  --color-done-bg: var(--status-done-bg);
+  --color-done-border: var(--status-done-border);
+  --color-done-title: var(--status-done-title);
+
+  /* --- Task priority (achromatic by design) --------------------------- */
+  --color-priority-track: var(--priority-track);
+  --color-priority-low: var(--priority-low-fg);
+  --color-priority-med: var(--priority-med-fg);
+  --color-priority-high: var(--priority-high-fg);
+
+  /* --- Due date ------------------------------------------------------- */
+  --color-due-overdue-fg: var(--due-overdue-fg);
+  --color-due-overdue-bg: var(--due-overdue-bg);
+  --color-due-overdue-border: var(--due-overdue-border);
+  --color-due-today-fg: var(--due-today-fg);
+  --color-due-today-bg: var(--due-today-bg);
+  --color-due-today-border: var(--due-today-border);
+  --color-due-soon-fg: var(--due-soon-fg);
+  --color-due-soon-bg: var(--due-soon-bg);
+  --color-due-soon-border: var(--due-soon-border);
+  --color-due-future-fg: var(--due-future-fg);
+  --color-due-none-fg: var(--due-none-fg);
+
+  /* --- Agent execution ------------------------------------------------ */
+  --color-agent-idle: var(--agent-idle-fg);
+  --color-agent-executing: var(--agent-executing-fg);
+  --color-agent-executing-bg: var(--agent-executing-bg);
+  --color-agent-ok: var(--agent-tool-ok-fg);
+  --color-agent-ok-bg: var(--agent-tool-ok-bg);
+  --color-agent-ok-border: var(--agent-tool-ok-border);
+  --color-agent-fail: var(--agent-tool-fail-fg);
+  --color-agent-fail-bg: var(--agent-tool-fail-bg);
+  --color-agent-fail-border: var(--agent-tool-fail-border);
+  --color-agent-awaiting: var(--agent-awaiting-fg);
+  --color-agent-awaiting-bg: var(--agent-awaiting-bg);
+  --color-agent-awaiting-border: var(--agent-awaiting-border);
+  --color-agent-complete: var(--agent-complete-fg);
+  --color-agent-busy: var(--agent-busy-fg);
+  --color-agent-busy-bg: var(--agent-busy-bg);
+  --color-agent-busy-border: var(--agent-busy-border);
+  --color-agent-error: var(--agent-error-fg);
+
+  /* --- Feedback ------------------------------------------------------- */
+  --color-success: var(--feedback-success-fg);
+  --color-success-bg: var(--feedback-success-bg);
+  --color-success-border: var(--feedback-success-border);
+  --color-warning: var(--feedback-warning-fg);
+  --color-warning-bg: var(--feedback-warning-bg);
+  --color-warning-border: var(--feedback-warning-border);
+  --color-danger: var(--feedback-danger-fg);
+  --color-danger-bg: var(--feedback-danger-bg);
+  --color-danger-border: var(--feedback-danger-border);
+  --color-info: var(--feedback-info-fg);
+  --color-info-bg: var(--feedback-info-bg);
+  --color-info-border: var(--feedback-info-border);
+
+  /* --- Typography ----------------------------------------------------- */
+  --font-prose: var(--font-prose);
+  --font-mono: var(--font-mono);
+
+  --text-micro: var(--size-10);
+  --text-micro--line-height: var(--lh-tight);
+  --text-micro--letter-spacing: var(--track-micro);
+  --text-micro--font-weight: var(--weight-medium);
+
+  --text-mono-sm: var(--size-11);
+  --text-mono-sm--line-height: var(--lh-snug);
+  --text-mono-sm--letter-spacing: var(--track-wide);
+  --text-mono-sm--font-weight: var(--weight-medium);
+
+  --text-mono-md: var(--size-12);
+  --text-mono-md--line-height: var(--lh-snug);
+
+  --text-body-sm: var(--size-13);
+  --text-body-sm--line-height: var(--lh-normal);
+  --text-body-sm--font-weight: var(--weight-medium);
+
+  --text-body: var(--size-15);
+  --text-body--line-height: var(--lh-relaxed);
+
+  --text-title: var(--size-17);
+  --text-title--line-height: var(--lh-snug);
+  --text-title--letter-spacing: var(--track-tight);
+  --text-title--font-weight: var(--weight-semibold);
+
+  --text-display: var(--size-20);
+  --text-display--line-height: var(--lh-tight);
+  --text-display--letter-spacing: var(--track-tight);
+  --text-display--font-weight: var(--weight-semibold);
+
+  /* --- Spacing -------------------------------------------------------- */
+  --spacing: 4px;
+
+  /* --- Radii ---------------------------------------------------------- */
+  --radius-xs: var(--radius-1);
+  --radius-sm: var(--radius-2);
+
+  /* --- Motion --------------------------------------------------------- */
+  --ease-sharp: var(--ease-sharp);
+  --ease-reveal: var(--ease-reveal);
+  --ease-exit: var(--ease-exit);
+
+  --animate-reveal: reveal var(--dur-3) var(--ease-reveal);
+  --animate-pulse-live: pulse var(--dur-pulse) ease-in-out infinite;
+  --animate-sweep: sweep var(--dur-sweep) var(--ease-linear) infinite;
+  --animate-breathe: breathe 1.4s ease-in-out infinite;
+
+  /* --- Z-index -------------------------------------------------------- */
+  --z-index-rail: var(--z-rail);
+  --z-index-sticky: var(--z-sticky);
+  --z-index-dock: var(--z-dock);
+  --z-index-scrim: var(--z-scrim);
+  --z-index-modal: var(--z-modal);
+  --z-index-popover: var(--z-popover);
+  --z-index-toast: var(--z-toast);
+}

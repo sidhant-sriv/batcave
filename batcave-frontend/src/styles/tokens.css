@@ -1,0 +1,659 @@
+/*
+ * batcave — token layer
+ * =============================================================================
+ *
+ * Three tiers, strictly ordered:
+ *
+ *   TIER 1  primitives   raw values, named for what they are
+ *   TIER 2  semantic     role aliases, named for what they mean
+ *   TIER 3  component    per-component, named for where they are used
+ *
+ * The one rule that makes this system work: a component may only ever read a
+ * TIER 2 or TIER 3 token. If a component references `--ink-4` or `--amber-base`
+ * directly, the boundary has leaked and theming stops being a single-file
+ * change. Everything else here follows from that.
+ *
+ * Themes:
+ *   :root                  night (dark, the default and primary experience)
+ *   [data-theme='day']     day (light) — redefines TIER 1 only
+ *
+ * A future high-contrast theme overrides TIER 2 only. It is not written yet;
+ * the architecture is what guarantees it is possible. See the note above the
+ * `day` block.
+ *
+ * Colour is OKLCH throughout. It is what makes the light theme a re-derivation
+ * rather than a guess: lightness is perceptually uniform, so a contrast floor
+ * can be reasoned about from the L channel instead of measured after the fact.
+ */
+
+/* ==========================================================================
+ * TIER 1 — PRIMITIVES
+ * Raw values. No meaning is attached here and none should be inferred from
+ * the names. Never referenced by a component.
+ * ========================================================================== */
+
+:root {
+  /* ----------------------------------------------------------------------
+   * Neutral ramp — warm, very low chroma, hue 60.
+   *
+   * Deliberately not a blue-black. The slight warm bias is the single cheapest
+   * thing that makes the substrate read as a physical panel rather than a CSS
+   * default. Chroma stays under 0.008 so it never reads as "brown", only as
+   * "not cold".
+   *
+   * Contrast against --ink-0, which is what every floor below is measured on:
+   *   ink-6   3.6:1   lowest step allowed to draw a control boundary
+   *   ink-7   5.6:1   lowest step allowed to carry text of any size
+   *   ink-8   7.7:1
+   *   ink-11 13.0:1
+   * ink-3 and ink-4 are decorative hairlines. They must never be the sole
+   * indicator of state, because they do not clear 3:1 and are not meant to.
+   * -------------------------------------------------------------------- */
+  --ink-n1: oklch(0.115 0.006 60);
+  --ink-0: oklch(0.145 0.006 60);
+  --ink-1: oklch(0.175 0.006 60);
+  --ink-2: oklch(0.205 0.007 60);
+  --ink-3: oklch(0.245 0.008 60);
+  --ink-4: oklch(0.295 0.008 60);
+  --ink-5: oklch(0.38 0.008 60);
+  --ink-6: oklch(0.5 0.007 60);
+  --ink-7: oklch(0.62 0.006 60);
+  --ink-8: oklch(0.72 0.005 60);
+  --ink-9: oklch(0.82 0.004 60);
+  --ink-10: oklch(0.9 0.004 60);
+  --ink-11: oklch(0.955 0.003 60);
+  --ink-12: oklch(0.985 0.002 60);
+
+  /* Pure values, for compositing over an unknown surface. */
+  --white: oklch(1 0 0);
+  --black: oklch(0 0 0);
+
+  /* Translucent overlays. These are primitives rather than semantic values
+   * because they composite over whatever is behind them and so cannot be
+   * expressed as a step on the ramp — and because the light theme has to flip
+   * them from lightening to darkening, which has to happen in TIER 1 for the
+   * "day redefines primitives only" rule to hold. */
+  --overlay-subtle: oklch(1 0 0 / 0.035);
+  --overlay-strong: oklch(1 0 0 / 0.055);
+  --overlay-scrim: oklch(0.09 0.005 60 / 0.72);
+  --overlay-on-accent: oklch(0.16 0.03 68);
+
+  /* ----------------------------------------------------------------------
+   * Chromatic ramps. Five steps each:
+   *   -subtle   a background tint, never text
+   *   -border   a boundary against that tint
+   *   -dim      a de-emphasised foreground
+   *   -base     the working foreground
+   *   -bright   the emphasised foreground
+   * -------------------------------------------------------------------- */
+
+  /* Signal amber — the one accent in the product. Warm enough to belong to the
+   * substrate, high enough in chroma that its appearance means something. */
+  --amber-subtle: oklch(0.24 0.045 68);
+  --amber-border: oklch(0.42 0.09 70);
+  --amber-dim: oklch(0.62 0.13 71);
+  --amber-base: oklch(0.78 0.16 72);
+  --amber-bright: oklch(0.87 0.14 74);
+
+  --red-subtle: oklch(0.225 0.055 27);
+  --red-border: oklch(0.4 0.11 27);
+  --red-dim: oklch(0.56 0.17 27);
+  --red-base: oklch(0.68 0.195 27);
+  --red-bright: oklch(0.79 0.15 27);
+
+  --green-subtle: oklch(0.215 0.035 150);
+  --green-border: oklch(0.37 0.07 150);
+  --green-dim: oklch(0.55 0.11 150);
+  --green-base: oklch(0.72 0.14 150);
+  --green-bright: oklch(0.82 0.11 150);
+
+  --yellow-subtle: oklch(0.235 0.045 88);
+  --yellow-border: oklch(0.41 0.085 88);
+  --yellow-dim: oklch(0.64 0.115 88);
+  --yellow-base: oklch(0.8 0.135 88);
+  --yellow-bright: oklch(0.885 0.115 88);
+
+  /* Info. Cool, but at a chroma low enough that it can never glow — a banned
+   * aesthetic gets designed out at the primitive, not policed at the component. */
+  --slate-subtle: oklch(0.22 0.02 240);
+  --slate-border: oklch(0.39 0.035 240);
+  --slate-dim: oklch(0.56 0.05 240);
+  --slate-base: oklch(0.7 0.06 240);
+  --slate-bright: oklch(0.82 0.045 240);
+
+  /* ----------------------------------------------------------------------
+   * Spacing — base unit 4px. Every gap in the product is one of these.
+   * -------------------------------------------------------------------- */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Type sizes. Small and specific: a dense console does not need a ratio. */
+  --size-10: 10px;
+  --size-11: 11px;
+  --size-12: 12px;
+  --size-13: 13px;
+  --size-14: 14px;
+  --size-15: 15px;
+  --size-17: 17px;
+  --size-20: 20px;
+  --size-24: 24px;
+
+  --lh-tight: 1.15;
+  --lh-snug: 1.35;
+  --lh-normal: 1.5;
+  --lh-relaxed: 1.6;
+
+  --track-tight: -0.01em;
+  --track-0: 0em;
+  --track-wide: 0.04em;
+  --track-wider: 0.09em;
+  --track-widest: 0.14em;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* Radii. Near-zero on purpose: a rounded pill reads as a consumer chip, and
+   * this is not a consumer product. --radius-full exists for exactly one case,
+   * the circular structural slot in the nav rail. */
+  --radius-0: 0px;
+  --radius-1: 2px;
+  --radius-2: 3px;
+  --radius-full: 999px;
+
+  --bw-hair: 1px;
+  --bw-rail: 2px;
+  --bw-heavy: 3px;
+
+  /* Durations. Short, because precision reads as competence and delay reads as
+   * decoration. The three long ones are the only sustained motion in the
+   * product and each is justified by something genuinely taking time. */
+  --dur-0: 0ms;
+  --dur-1: 90ms;
+  --dur-2: 110ms;
+  --dur-3: 160ms;
+  --dur-4: 240ms;
+  --dur-register: 1200ms;
+  --dur-pulse: 2000ms;
+  --dur-sweep: 1600ms;
+
+  --ease-sharp: cubic-bezier(0.2, 0, 0, 1);
+  --ease-reveal: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --ease-linear: linear;
+
+  --z-base: 0;
+  --z-rail: 10;
+  --z-sticky: 20;
+  --z-dock: 30;
+  --z-scrim: 40;
+  --z-modal: 50;
+  --z-popover: 60;
+  --z-toast: 70;
+
+  /* There are deliberately no shadow primitives. Depth in this system is
+   * layered lightness plus hairlines. A shadow token appearing anywhere in
+   * this codebase means the design has been violated. */
+}
+
+/* ==========================================================================
+ * TIER 2 — SEMANTIC
+ * Role aliases. This is the layer components are allowed to read, and the
+ * layer a high-contrast theme would override.
+ * ========================================================================== */
+
+:root {
+  /* --- Surfaces -------------------------------------------------------- */
+  --surface-app: var(--ink-0);
+  --surface-panel: var(--ink-1);
+  --surface-raised: var(--ink-2);
+  --surface-well: var(--ink-n1);
+  --surface-modal: var(--ink-2);
+  --surface-scrim: var(--overlay-scrim);
+  --surface-hover: var(--overlay-subtle);
+  --surface-selected: var(--overlay-strong);
+
+  /* --- Borders --------------------------------------------------------- */
+  --border-hairline: var(--ink-3);
+  --border-divider: var(--ink-4);
+  --border-control: var(--ink-6);
+  --border-strong: var(--ink-7);
+  --border-focus: var(--amber-base);
+
+  /* --- Text ------------------------------------------------------------ */
+  --text-primary: var(--ink-11);
+  --text-secondary: var(--ink-8);
+  --text-muted: var(--ink-7);
+  --text-disabled: var(--ink-6);
+  --text-inverted: var(--ink-0);
+  --text-on-accent: var(--overlay-on-accent);
+  --text-link: var(--amber-base);
+
+  /* --- Accent ----------------------------------------------------------
+   * Permitted in exactly five places. Anywhere else is a bug:
+   *   1. in_progress status — the only status that reads as live
+   *   2. the focus ring
+   *   3. the primary button
+   *   4. the due-today chip
+   *   5. selection and the update-acknowledgment flash
+   * -------------------------------------------------------------------- */
+  --accent-base: var(--amber-base);
+  --accent-hover: var(--amber-bright);
+  --accent-active: var(--amber-dim);
+  --accent-subtle: var(--amber-subtle);
+  --accent-border: var(--amber-border);
+  --accent-fg: var(--overlay-on-accent);
+
+  /* --- Task status -----------------------------------------------------
+   * Three, and only three. `done` recedes; `in_progress` is the only status
+   * carrying chroma anywhere in the product. Colour is never the sole
+   * encoding — each status also owns a square glyph, see --statusglyph-*.
+   * -------------------------------------------------------------------- */
+  --status-todo-fg: var(--ink-8);
+  --status-todo-bg: var(--ink-2);
+  --status-todo-border: var(--ink-4);
+
+  --status-progress-fg: var(--amber-bright);
+  --status-progress-bg: var(--amber-subtle);
+  --status-progress-border: var(--amber-border);
+
+  --status-done-fg: var(--ink-7);
+  --status-done-bg: transparent;
+  --status-done-border: var(--ink-3);
+  --status-done-title: var(--ink-6);
+
+  /* --- Task priority ---------------------------------------------------
+   * Entirely achromatic, by design. Priority and status sit side by side on
+   * every row, so they are separated by *channel*, not by hue:
+   *
+   *   status   owns colour + a square glyph, inline with the title
+   *   priority owns segment count + a fixed position, the row's left edge
+   *
+   * They cannot be confused in greyscale, and they never compete for the same
+   * signal. High priority is pure white on warm near-black, which pops harder
+   * than a colour would and costs nothing from the accent budget.
+   * -------------------------------------------------------------------- */
+  --priority-track: var(--ink-3);
+  --priority-low-fg: var(--ink-6);
+  --priority-med-fg: var(--ink-8);
+  --priority-high-fg: var(--ink-11);
+
+  /* --- Due date --------------------------------------------------------
+   * Derived state, not a stored field. Computed in one place, src/lib/dueDate.ts.
+   * `overdue` also carries a leading `!` and `today` renders the literal word,
+   * so neither depends on colour alone.
+   * -------------------------------------------------------------------- */
+  --due-overdue-fg: var(--red-bright);
+  --due-overdue-bg: var(--red-subtle);
+  --due-overdue-border: var(--red-border);
+
+  --due-today-fg: var(--amber-bright);
+  --due-today-bg: var(--amber-subtle);
+  --due-today-border: var(--amber-border);
+
+  --due-soon-fg: var(--ink-9);
+  --due-soon-bg: var(--ink-2);
+  --due-soon-border: var(--ink-4);
+
+  --due-future-fg: var(--ink-7);
+  --due-future-bg: transparent;
+  --due-future-border: transparent;
+
+  --due-none-fg: var(--ink-6);
+  --due-none-bg: transparent;
+  --due-none-border: transparent;
+
+  /* --- Agent execution states ------------------------------------------
+   * The API answers a whole turn in one response, so these describe what can
+   * honestly be observed: submitted, executing, resolved, failed, blocked.
+   *
+   * `thinking` and `tool-running` are aliases of the in-flight state rather
+   * than distinct values. They exist so that if the backend ever grows a
+   * streaming endpoint, the states it would expose already have names here and
+   * no component has to be renamed to consume them.
+   * -------------------------------------------------------------------- */
+  --agent-idle-fg: var(--ink-7);
+  --agent-executing-fg: var(--amber-base);
+  --agent-executing-bg: var(--amber-subtle);
+  --agent-executing-track: var(--ink-3);
+  --agent-thinking-fg: var(--agent-executing-fg);
+  --agent-tool-running-fg: var(--agent-executing-fg);
+
+  --agent-tool-ok-fg: var(--green-base);
+  --agent-tool-ok-bg: var(--green-subtle);
+  --agent-tool-ok-border: var(--green-border);
+
+  --agent-tool-fail-fg: var(--red-base);
+  --agent-tool-fail-bg: var(--red-subtle);
+  --agent-tool-fail-border: var(--red-border);
+
+  /* Blocked, awaiting your call — never red. The agent refusing to guess is
+   * correct behaviour, and the colour has to say so. */
+  --agent-awaiting-fg: var(--amber-base);
+  --agent-awaiting-bg: var(--amber-subtle);
+  --agent-awaiting-border: var(--amber-border);
+
+  --agent-complete-fg: var(--ink-8);
+  --agent-busy-fg: var(--yellow-base);
+  --agent-busy-bg: var(--yellow-subtle);
+  --agent-busy-border: var(--yellow-border);
+  --agent-error-fg: var(--red-base);
+
+  /* --- Feedback --------------------------------------------------------
+   * Kept separate from status and priority even where the values coincide, so
+   * either side can move without dragging the other with it.
+   * -------------------------------------------------------------------- */
+  --feedback-success-fg: var(--green-base);
+  --feedback-success-bg: var(--green-subtle);
+  --feedback-success-border: var(--green-border);
+
+  --feedback-warning-fg: var(--yellow-base);
+  --feedback-warning-bg: var(--yellow-subtle);
+  --feedback-warning-border: var(--yellow-border);
+
+  --feedback-danger-fg: var(--red-base);
+  --feedback-danger-bg: var(--red-subtle);
+  --feedback-danger-border: var(--red-border);
+
+  --feedback-info-fg: var(--slate-base);
+  --feedback-info-bg: var(--slate-subtle);
+  --feedback-info-border: var(--slate-border);
+
+  /* --- Typography ------------------------------------------------------
+   * The split is load-bearing and absolute: if a string came out of the
+   * database or names a machine concept, it is mono. If a human or the model
+   * wrote it as language, it is prose. There is no third case.
+   * -------------------------------------------------------------------- */
+  --font-prose: 'Instrument Sans', ui-sans-serif, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /* Composite font shorthands: size/line-height and family in one token, so a
+   * component sets a role rather than four properties. Weight and tracking are
+   * separate because `font` shorthand cannot carry letter-spacing. */
+  --type-display: var(--weight-semibold) var(--size-20) / var(--lh-tight) var(--font-prose);
+  --type-title: var(--weight-semibold) var(--size-17) / var(--lh-snug) var(--font-prose);
+  --type-body: var(--weight-regular) var(--size-15) / var(--lh-relaxed) var(--font-prose);
+  --type-body-sm: var(--weight-medium) var(--size-13) / var(--lh-normal) var(--font-prose);
+  --type-label: var(--weight-medium) var(--size-13) / var(--lh-snug) var(--font-prose);
+  --type-mono-md: var(--weight-regular) var(--size-12) / var(--lh-snug) var(--font-mono);
+  --type-mono-sm: var(--weight-medium) var(--size-11) / var(--lh-snug) var(--font-mono);
+  --type-micro: var(--weight-medium) var(--size-10) / var(--lh-tight) var(--font-mono);
+
+  --track-display: var(--track-tight);
+  --track-title: var(--track-tight);
+  --track-body: var(--track-0);
+  --track-mono-sm: var(--track-wide);
+  /* The signature of the system. 10px uppercase mono at this tracking is what
+   * makes data feel plotted onto the surface rather than typed into it. */
+  --track-micro: var(--track-widest);
+
+  /* --- Motion ---------------------------------------------------------- */
+  --motion-state: var(--dur-1) var(--ease-sharp);
+  --motion-enter: var(--dur-3) var(--ease-reveal);
+  --motion-exit: var(--dur-2) var(--ease-exit);
+  --motion-register: var(--dur-register) var(--ease-sharp);
+  --motion-execute: var(--dur-sweep) var(--ease-linear);
+  --motion-pulse: var(--dur-pulse) ease-in-out;
+
+  /* --- Focus -----------------------------------------------------------
+   * One definition, used by every interactive element. A double ring: the
+   * inner one in the surface colour separates the outer one from the element,
+   * so it survives on any background in either theme without being restated.
+   * -------------------------------------------------------------------- */
+  --focus-ring: 0 0 0 1px var(--surface-app), 0 0 0 3px var(--border-focus);
+  --focus-ring-inset: inset 0 0 0 1px var(--border-focus);
+}
+
+/* ==========================================================================
+ * TIER 3 — COMPONENT
+ * Per-component values, reading TIER 2 only.
+ * ========================================================================== */
+
+:root {
+  /* --- Application shell ----------------------------------------------- */
+  --shell-rail-w: 56px;
+  --shell-max-w: 1200px;
+  --shell-header-h: 44px;
+
+  /* --- Task row / card -------------------------------------------------
+   * 36px is dense and stays legible because the metadata sits on the same
+   * baseline row as the title rather than stacked beneath it.
+   * -------------------------------------------------------------------- */
+  --task-row-h: 36px;
+  --task-row-h-comfy: 44px;
+  --task-row-bg: transparent;
+  --task-row-bg-hover: var(--surface-hover);
+  --task-row-bg-selected: var(--surface-selected);
+  --task-row-border: var(--border-hairline);
+  --task-row-pad-x: var(--space-3);
+  --task-row-gap: var(--space-3);
+
+  /* Fixed column widths. The index is a table, and a table whose columns move
+   * as the data changes is unreadable at a glance — which is the one thing this
+   * surface has to be. Sized to the widest content each column can hold:
+   * "ACTIVE" for status, "! 12D LATE" for due, "12 SEP" for updated. */
+  --task-col-status: 86px;
+  --task-col-due: 92px;
+  --task-col-updated: 68px;
+
+  --task-card-bg: var(--surface-panel);
+  --task-card-border: var(--border-hairline);
+  --task-card-min-h: 64px;
+  --task-card-pad: var(--space-3);
+
+  /* Priority rail: 3 segments, fixed at the row's left edge. */
+  --priority-rail-w: 3px;
+  --priority-seg-h: 5px;
+  --priority-seg-gap: 2px;
+
+  /* Status pill and its glyph. */
+  --pill-h: 16px;
+  --pill-pad-x: var(--space-2);
+  --pill-radius: var(--radius-1);
+  --pill-gap: 6px;
+  --statusglyph-size: 7px;
+
+  /* Due-date chip. */
+  --due-chip-h: 16px;
+  --due-chip-pad-x: 6px;
+  --due-chip-radius: var(--radius-1);
+
+  /* --- Chat / agent console -------------------------------------------- */
+  --msg-gap: var(--space-5);
+  --msg-max-w: 68ch;
+  --msg-user-rail: var(--accent-base);
+  --msg-user-rail-w: var(--bw-rail);
+  --msg-user-bg: var(--surface-raised);
+  --msg-user-pad: var(--space-3);
+  --msg-agent-bg: transparent;
+  --msg-agent-fg: var(--text-primary);
+
+  /* Tool activity is subordinate to prose: indented, smaller, muted, and
+   * never wider than the prose column. */
+  --toolchip-h: 22px;
+  --toolchip-bg: var(--surface-raised);
+  --toolchip-border: var(--border-hairline);
+  --toolchip-fg: var(--text-muted);
+  --toolchip-radius: var(--radius-1);
+  --toolchip-pad-x: var(--space-2);
+  --toolchip-indent: var(--space-4);
+
+  --toolresult-bg: var(--surface-panel);
+  --toolresult-border: var(--border-divider);
+  --toolresult-tick: 6px;
+  --toolresult-ordinal-w: 24px;
+  --toolresult-row-h: 32px;
+
+  --disambig-bg: var(--agent-awaiting-bg);
+  --disambig-border: var(--agent-awaiting-border);
+  --disambig-rail-w: var(--bw-rail);
+
+  --composer-bg: var(--surface-well);
+  --composer-border: var(--border-control);
+  --composer-min-h: 60px;
+
+  --executing-rail-h: 2px;
+  --executing-rail-track: var(--agent-executing-track);
+  --executing-rail-fill: var(--agent-executing-fg);
+
+  /* --- Chat list -------------------------------------------------------- */
+  --chatlist-w: 240px;
+  --chatitem-h: 44px;
+  --chatitem-pad-x: var(--space-3);
+  --chatitem-bg: transparent;
+  --chatitem-bg-hover: var(--surface-hover);
+  --chatitem-bg-active: var(--surface-selected);
+  --chatitem-rail: var(--accent-base);
+  --chatitem-rail-w: var(--bw-rail);
+  --chatitem-title-fg: var(--text-secondary);
+  --chatitem-title-fg-active: var(--text-primary);
+  --chatitem-untitled-fg: var(--text-disabled);
+  --chatitem-meta-fg: var(--text-muted);
+
+  /* --- Dock ------------------------------------------------------------- */
+  --dock-w: 420px;
+  --dock-w-min: 360px;
+  --dock-w-max: 560px;
+  --dock-border: var(--border-divider);
+  --dock-bg: var(--surface-app);
+
+  /* --- Modal ------------------------------------------------------------ */
+  --modal-w: 640px;
+  --modal-bg: var(--surface-modal);
+  --modal-border: var(--border-divider);
+  --modal-pad: var(--space-6);
+  --modal-radius: var(--radius-2);
+
+  /* --- Form fields ------------------------------------------------------ */
+  --field-h: 32px;
+  --field-bg: var(--surface-well);
+  --field-border: var(--border-control);
+  --field-border-focus: var(--border-focus);
+  --field-fg: var(--text-primary);
+  --field-placeholder: var(--text-disabled);
+  --field-radius: var(--radius-1);
+  --field-pad-x: var(--space-2);
+  --field-invalid-border: var(--feedback-danger-fg);
+
+  /* --- Buttons ---------------------------------------------------------- */
+  --btn-h: 30px;
+  --btn-h-sm: 24px;
+  --btn-radius: var(--radius-1);
+  --btn-pad-x: var(--space-3);
+
+  --btn-primary-bg: var(--accent-base);
+  --btn-primary-bg-hover: var(--accent-hover);
+  --btn-primary-bg-active: var(--accent-active);
+  --btn-primary-fg: var(--accent-fg);
+
+  --btn-ghost-bg: transparent;
+  --btn-ghost-bg-hover: var(--surface-hover);
+  --btn-ghost-border: var(--border-control);
+  --btn-ghost-fg: var(--text-secondary);
+
+  --btn-danger-bg: transparent;
+  --btn-danger-border: var(--feedback-danger-border);
+  --btn-danger-fg: var(--feedback-danger-fg);
+  --btn-danger-bg-hover: var(--feedback-danger-bg);
+
+  /* --- Empty / loading / error states ----------------------------------- */
+  --empty-fg: var(--text-muted);
+  --empty-rule: var(--border-hairline);
+  --empty-pad: var(--space-12);
+  --skeleton-bg: var(--surface-raised);
+}
+
+/* ==========================================================================
+ * THEME: day (light)
+ * ==========================================================================
+ *
+ * Not an inversion. The night strategy — elevation by rising lightness —
+ * inverts into nonsense on light, because a panel raised above white has
+ * nowhere left to go.
+ *
+ *   REPLACEMENT RULE
+ *   On `day`, elevation is carried by a tinted ground plus mandatory hairlines,
+ *   not by lightness. The app background is a warm off-white; panels are
+ *   near-pure white *above* it; wells sit *below* it. Every panel carries a
+ *   hairline that is proportionally darker than its night counterpart, because
+ *   on light the border does the work the luminance step used to do.
+ *
+ * Only TIER 1 is redefined below. Every TIER 2 alias is untouched —
+ * --surface-panel is still var(--ink-1), it simply means something different
+ * now. That is also the proof the architecture supports a high-contrast theme:
+ * such a theme would override TIER 2 alone (--text-muted to a lighter step,
+ * --border-hairline to --ink-6, --focus-ring widened) and would need to touch
+ * neither a primitive nor a component.
+ */
+
+[data-theme='day'] {
+  --ink-n1: oklch(0.93 0.005 70);
+  --ink-0: oklch(0.965 0.004 70);
+  --ink-1: oklch(0.995 0.002 70);
+  --ink-2: oklch(1 0 0);
+  --ink-3: oklch(0.885 0.006 70);
+  --ink-4: oklch(0.83 0.007 70);
+  --ink-5: oklch(0.72 0.008 70);
+  --ink-6: oklch(0.615 0.008 70);
+  --ink-7: oklch(0.52 0.008 70);
+  --ink-8: oklch(0.415 0.008 70);
+  --ink-9: oklch(0.33 0.008 70);
+  --ink-10: oklch(0.255 0.007 70);
+  --ink-11: oklch(0.19 0.006 70);
+  --ink-12: oklch(0.13 0.005 70);
+
+  /* The ramps run the other way now: -subtle is a pale tint and -base darkens
+   * far enough to clear 4.5:1 on the ground. The accent stays unmistakably the
+   * same signal — it darkens rather than brightens, which is what a warning
+   * lamp does against daylight. */
+  /* The amber has to darken further on light than a naive inversion suggests:
+   * a warm hue at this chroma carries a lot of luminance, and `-base` is used
+   * as text on both the ground and its own subtle tint. Both are held to 4.5:1
+   * by scripts/contrast.ts, which is what pinned these values. */
+  --amber-subtle: oklch(0.965 0.033 78);
+  --amber-border: oklch(0.83 0.09 74);
+  --amber-dim: oklch(0.68 0.135 72);
+  --amber-base: oklch(0.523 0.15 62);
+  --amber-bright: oklch(0.43 0.13 58);
+
+  --red-subtle: oklch(0.955 0.025 25);
+  --red-border: oklch(0.82 0.09 27);
+  --red-dim: oklch(0.65 0.17 27);
+  --red-base: oklch(0.525 0.19 27);
+  --red-bright: oklch(0.44 0.16 27);
+
+  --green-subtle: oklch(0.955 0.03 150);
+  --green-border: oklch(0.8 0.08 150);
+  --green-dim: oklch(0.62 0.12 152);
+  --green-base: oklch(0.5 0.115 153);
+  --green-bright: oklch(0.42 0.1 154);
+
+  --yellow-subtle: oklch(0.965 0.042 95);
+  --yellow-border: oklch(0.85 0.09 90);
+  --yellow-dim: oklch(0.68 0.12 86);
+  --yellow-base: oklch(0.527 0.115 76);
+  --yellow-bright: oklch(0.44 0.1 72);
+
+  --slate-subtle: oklch(0.955 0.012 240);
+  --slate-border: oklch(0.82 0.03 240);
+  --slate-dim: oklch(0.63 0.05 240);
+  --slate-base: oklch(0.5 0.06 245);
+  --slate-bright: oklch(0.41 0.055 245);
+
+  /* Overlays flip from lightening to darkening, and the scrim becomes a warm
+   * grey rather than a near-black. Because these are primitives, the semantic
+   * layer above them needs no light-theme override at all. */
+  --overlay-subtle: oklch(0 0 0 / 0.038);
+  --overlay-strong: oklch(0 0 0 / 0.06);
+  --overlay-scrim: oklch(0.3 0.01 70 / 0.34);
+  --overlay-on-accent: oklch(0.99 0.01 80);
+}

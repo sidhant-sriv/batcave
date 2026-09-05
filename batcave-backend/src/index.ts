@@ -1,4 +1,5 @@
 import { Hono, type ErrorHandler } from 'hono';
+import { cors } from 'hono/cors';
 import { findInfrastructureError } from './agent/middleware/escalate';
 import { classifyModelError } from './agent/modelErrors';
 import { ERRORS } from './errors';
@@ -9,6 +10,28 @@ import { TaskNotFoundError, TaskValidationError } from './services/taskService';
 import type { Env } from './types/task';
 
 const app = new Hono<{ Bindings: Env }>();
+
+/** Where the frontend runs in local development, when nothing is configured. */
+const DEV_ORIGIN = 'http://localhost:5173';
+
+/**
+ * The frontend is a separate Pages deployment, so every browser call is
+ * cross-origin. Allowlisted from a var rather than `*` because `Idempotency-Key`
+ * is a non-simple header: the browser preflights any turn that sends one, and a
+ * wildcard would not name it. Echoing the request's own origin rather than
+ * returning the whole list is what keeps the response cacheable per origin.
+ */
+app.use('/api/*', cors({
+  origin: (origin, c) => {
+    const configured = (c.env as Env).CORS_ORIGINS ?? DEV_ORIGIN;
+    const allowed = configured.split(',').map((entry) => entry.trim());
+
+    return allowed.includes(origin) ? origin : null;
+  },
+  allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Idempotency-Key'],
+  maxAge: 86400,
+}));
 
 app.get('/health', (c) => c.json({ status: 'ok' }));
 

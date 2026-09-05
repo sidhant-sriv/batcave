@@ -1,0 +1,8 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "batcave-frontend",
+  "compatibility_date": "2026-09-04",
+  // Pages serves the Vite build directly. There is no Worker here: the API is a
+  // separate deployment, reached cross-origin and allowlisted by its CORS_ORIGINS.
+  "pages_build_output_dir": "dist"
+}

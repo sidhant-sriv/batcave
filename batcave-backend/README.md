@@ -4,8 +4,8 @@ Task management API on Cloudflare Workers — Hono, D1, Zod, and a LangGraph age
 over Groq for the natural-language endpoint.
 
 The agent creates, searches and updates tasks, runs a bounded tool loop, and
-remembers the conversation server-side. There is no delete, auth, or user
-management yet.
+remembers the conversation server-side. Conversations are full CRUD; tasks have
+no delete yet, and there is no auth or user management.
 
 ## Stack
 
@@ -248,11 +248,79 @@ history and a live reply with one code path. It reads the checkpoint directly:
 no run is claimed, the model is never called, and a conversation whose last turn
 failed still reads back. `404` if the chat is not there.
 
+### `GET /api/chats`
+
+Conversations, newest first. Metadata only — turns would cost a checkpoint
+decode per chat, which is what `turn_count` exists to avoid:
+
+```sh
+curl 'http://localhost:8787/api/chats?limit=20'
+```
+
+```json
+{
+  "chats": [
+    {
+      "id": "01a0...",
+      "title": "Add a task to renew the domain by Friday",
+      "turn_count": 3,
+      "created_at": "2026-09-05T12:15:10.291Z",
+      "last_message_at": "2026-09-05T12:19:44.108Z"
+    }
+  ],
+  "truncated": false
+}
+```
+
+`limit` is 1–100, default 20. `truncated` is true when more chats matched.
+
+### `PATCH /api/chats/:chat_id`
+
+`title` is the only field a client owns; everything else is server-generated, so
+anything else in the body is rejected rather than ignored.
+
+```sh
+curl -X PATCH http://localhost:8787/api/chats/01a0... \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "Domain admin"}'
+```
+
+`200` with `{ "chat": { ... } }`. `{"title": null}` puts it back to untitled, and
+the next message will auto-name it again.
+
+### `DELETE /api/chats/:chat_id`
+
+```sh
+curl -X DELETE http://localhost:8787/api/chats/01a0...
+```
+
+`204`. Clears the conversation, its threads, and every checkpoint, write and run
+row the agent left behind. `409` while a turn is still running, rather than
+leaving the graph writing checkpoints nothing points at.
+
 ### `GET /health`
 
 ```json
 { "status": "ok" }
 ```
+
+### CORS
+
+`batcave-frontend` is a separate Pages deployment, so every browser call is
+cross-origin. `/api/*` is wrapped in `hono/cors` with an allowlist read from the
+`CORS_ORIGINS` var — comma separated, defaulting to `http://localhost:5173`:
+
+```jsonc
+"vars": { "CORS_ORIGINS": "http://localhost:5173,https://batcave-frontend.pages.dev" }
+```
+
+Allowlisted rather than `*` because `Idempotency-Key` is a non-simple header:
+the browser preflights any turn that sends one, and a wildcard would not name
+it. The request's own origin is echoed back, so the response stays cacheable per
+origin. An origin that is not listed simply gets no `Access-Control-Allow-Origin`
+header, which the browser turns into a blocked request.
+
+Add the Pages URL here and redeploy the Worker after the first `pages deploy`.
 
 ### Errors
 
@@ -260,7 +328,7 @@ failed still reads back. `404` if the chat is not there.
 | ------ | ----------------------------------------------------------------- |
 | 400    | Malformed JSON, or Zod validation failed (`issues` included)       |
 | 404    | Unknown route, an unknown task id, or an unknown `chat_id`         |
-| 409    | Another turn is already running on this conversation               |
+| 409    | A turn is already running on this conversation (send, or delete)   |
 | 500    | `GROQ_API_KEY` unset, or an unexpected failure                     |
 | 502    | Groq unreachable or returned an error                              |
 | 503    | A tool could not reach the database; the turn is resumable         |
@@ -373,7 +441,18 @@ database.
   newest three per thread, which costs no history.
 - **Strict concurrency** — the run claim bounds it, but its TTL is the weak
   point. Moving the graph into a Durable Object is the structural fix.
-- **Auth** — Hono middleware in `index.ts`, ahead of the route mounts.
+- **Auth** — Hono middleware in `index.ts`, ahead of the route mounts. `chats`
+  is where a `user_id` belongs; every other table reaches it through `chat_id`.
+- **Streaming** — deliberately not built: turns land in a couple of seconds, so
+  a response-based client is fine. If it is ever wanted, `streamSSE` from
+  `hono/streaming` plus `agent.stream(state, config)` covers it, and the last
+  event should carry today's `{ chat, reply, actions }` body so replay and
+  non-streaming clients need no second code path. Three things bite: once SSE
+  headers are sent no status code can change, so `escalate`'s 503 and
+  `classifyModelError`'s 502/504 have to become in-stream events; `fail()` must
+  run before the stream closes rather than by rethrowing to `onError`; and
+  `ScriptedModel` needs `_streamResponseChunks`, or token tests pass while
+  asserting one chunk that happens to be the whole reply.
 
 ## Design notes
 

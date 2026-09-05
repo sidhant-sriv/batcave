@@ -16,6 +16,9 @@
     }
   ],
   "vars": {
-    "GROQ_MODEL": "qwen/qwen3.8-27b"
+    "GROQ_MODEL": "qwen/qwen3.8-27b",
+    // Origins the browser frontend may call /api/* from. Add the Pages
+    // deployment's URL here and redeploy once the project exists.
+    "CORS_ORIGINS": "http://localhost:5173,https://batcave-frontend.pages.dev"
   }
 }

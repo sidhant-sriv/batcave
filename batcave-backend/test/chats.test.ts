@@ -2,7 +2,8 @@ import { env } from 'cloudflare:test';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { claim, runKey } from '../src/agent/runs';
-import { insertThread, selectActiveThread } from '../src/db/chats';
+import { insertThread, selectActiveThread, type ChatRow } from '../src/db/chats';
+import { ERRORS } from '../src/errors';
 import { onError } from '../src/index';
 import { uuidv7 } from '../src/ids';
 import { createChatRoute } from '../src/routes/chat';
@@ -14,7 +15,7 @@ import {
   titleFrom,
 } from '../src/services/chatService';
 import type { Env } from '../src/types/task';
-import { send } from './helpers/chat';
+import { send, startChat } from './helpers/chat';
 import { resetDb } from './helpers/reset';
 import { ScriptedModel, type ScriptStep } from './helpers/scriptedModel';
 
@@ -273,5 +274,138 @@ describe('deleting', () => {
 
   it('refuses a chat that is not there', async () => {
     await expect(service().remove(crypto.randomUUID())).rejects.toThrow(ChatNotFoundError);
+  });
+});
+
+describe('the chat endpoints', () => {
+  const app = () => agentApp([{ text: 'Answered.' }]);
+
+  /** Every field any of these endpoints can answer with, so assertions stay
+   *  readable without a cast at each call site. */
+  interface Body {
+    chats: Array<ChatRow & { turns?: unknown }>;
+    chat: ChatRow;
+    truncated: boolean;
+    error: string;
+  }
+
+  const request = async (
+    path: string,
+    init: RequestInit = {},
+    instance: Hono<{ Bindings: Env }> = app(),
+  ): Promise<{ status: number; body: Body }> => {
+    const response = await instance.request(path, init, env);
+    const text = await response.text();
+    // 204 has no body, and no test reads one; `{}` keeps the callers untyped-null free.
+    // 204 has no body, and no test reads one.
+    return { status: response.status, body: (text ? JSON.parse(text) : {}) as Body };
+  };
+
+  describe('listing', () => {
+    it('is newest first, with the metadata a sidebar needs', async () => {
+      const chats = service();
+      const older = (await chats.create()).chat;
+      const newer = (await chats.create()).chat;
+      await setLastMessageAt(older.id, '2026-01-01T00:00:00.000Z');
+      await setLastMessageAt(newer.id, '2026-09-01T00:00:00.000Z');
+
+      const { status, body } = await request('/api/chats');
+
+      expect(status).toBe(200);
+      expect(body.chats.map((row) => row.id)).toEqual([newer.id, older.id]);
+      expect(body.chats[0]).toMatchObject({ title: null, turn_count: 0 });
+      expect(body.truncated).toBe(false);
+    });
+
+    it('never carries turns, however many the conversation has', async () => {
+      const instance = app();
+      const { chatId } = await startChat();
+      await send(instance, chatId, 'say something');
+
+      const { body } = await request('/api/chats', {}, instance);
+      expect(body.chats[0].turn_count).toBe(1);
+      expect(body.chats[0].turns).toBeUndefined();
+    });
+
+    it('truncates at the limit given', async () => {
+      const chats = service();
+      await chats.create();
+      await chats.create();
+
+      const { body } = await request('/api/chats?limit=1');
+      expect(body.chats).toHaveLength(1);
+      expect(body.truncated).toBe(true);
+    });
+
+    it('refuses a limit outside the range', async () => {
+      expect((await request('/api/chats?limit=0')).status).toBe(400);
+      expect((await request('/api/chats?limit=nonsense')).status).toBe(400);
+    });
+  });
+
+  describe('renaming', () => {
+    const patch = (id: string, body: unknown, instance?: Hono<{ Bindings: Env }>) =>
+      request(
+        `/api/chats/${id}`,
+        {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        instance,
+      );
+
+    it('sets a title, and clears it again', async () => {
+      const { chatId } = await startChat();
+
+      expect((await patch(chatId, { title: 'Domain admin' })).body.chat.title).toBe('Domain admin');
+      expect((await patch(chatId, { title: null })).body.chat.title).toBeNull();
+    });
+
+    it('refuses a field the client does not own', async () => {
+      const { chatId } = await startChat();
+
+      expect((await patch(chatId, { turn_count: 99 })).status).toBe(400);
+      expect((await patch(chatId, {})).status).toBe(400);
+    });
+
+    it('is 404 for a chat that is not there', async () => {
+      expect((await patch(crypto.randomUUID(), { title: 'x' })).status).toBe(404);
+    });
+  });
+
+  describe('deleting', () => {
+    const remove = (id: string, instance?: Hono<{ Bindings: Env }>) =>
+      request(`/api/chats/${id}`, { method: 'DELETE' }, instance);
+
+    it('answers 204 and the conversation stops existing', async () => {
+      const instance = app();
+      const { chatId, threadId } = await startChat();
+      await send(instance, chatId, 'say something');
+
+      expect((await remove(chatId, instance)).status).toBe(204);
+      expect((await request(`/api/chats/${chatId}`, {}, instance)).status).toBe(404);
+      expect(await countRows('checkpoints', threadId)).toBe(0);
+      expect(await countRows('agent_runs', threadId)).toBe(0);
+    });
+
+    it('is 409 while a turn is still running', async () => {
+      const { chatId, threadId } = await startChat();
+      await claim(env.DB, {
+        key: await runKey({ threadId, message: 'hi', checkpointId: null }),
+        threadId,
+        message: 'hi',
+        startCheckpointId: null,
+      });
+
+      const { status, body } = await remove(chatId);
+      expect(status).toBe(409);
+      expect(body.error).toBe(ERRORS.CHAT_BUSY);
+    });
+
+    it('is 404 for a chat that is not there, and 400 for a bad id', async () => {
+      expect((await remove(crypto.randomUUID())).status).toBe(404);
+      expect((await remove('not-a-uuid')).status).toBe(400);
+    });
   });
 });

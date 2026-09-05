@@ -20,4 +20,6 @@ export interface Env {
   DB: D1Database;
   GROQ_API_KEY: string;
   GROQ_MODEL?: string;
+  /** Comma-separated origins the browser frontend may call `/api/*` from. */
+  CORS_ORIGINS?: string;
 }

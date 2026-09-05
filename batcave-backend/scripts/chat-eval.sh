@@ -99,6 +99,25 @@ check_empty_chat() {
   echo "   created $id with $turns turn(s) (want 0)"
 }
 
+# List, rename, delete: the conversation as a resource rather than an endpoint.
+check_crud() {
+  local listed title status
+
+  echo
+  echo "── conversation CRUD"
+  listed=$(curl -sS "$BASE/api/chats?limit=50" | jq --arg id "$CHAT" '[.chats[] | select(.id == $id)] | length')
+  echo "   listed:   $listed (want 1)"
+
+  title=$(curl -sS -X PATCH "$BASE/api/chats/$CHAT" \
+    -H 'Content-Type: application/json' -d '{"title":"eval run"}' | jq -r '.chat.title')
+  echo "   renamed:  \"$title\" (want \"eval run\")"
+
+  status=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$BASE/api/chats/$CHAT")
+  echo "   deleted:  $status (want 204)"
+  status=$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api/chats/$CHAT")
+  echo "   and gone: $status (want 404)"
+}
+
 # The three ways to ask for a conversation that is not there.
 check_missing() {
   local unknown status
@@ -139,6 +158,8 @@ ask "Is Cloudflare a CDN?"
 replay
 check_empty_chat
 check_missing
+# Last, because it deletes the chat everything above was checking.
+check_crud
 
 echo
-echo "chat: $CHAT"
+echo "chat: $CHAT (deleted)"
