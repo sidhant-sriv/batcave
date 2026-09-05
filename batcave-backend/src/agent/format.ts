@@ -1,4 +1,4 @@
-import { AIMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { CREATE_TASK, SEARCH_TASKS } from './tools/names';
 
 /**
@@ -97,4 +97,46 @@ export function turnAfter(
   if (!messages) return [];
   const index = messages.findIndex((message) => message.id === userMessageId);
   return index === -1 ? [] : messages.slice(index + 1);
+}
+
+/** One exchange: what the user asked, and everything the agent did about it. */
+export interface ChatTurn {
+  message: string;
+  reply: string | null;
+  actions: AgentAction[];
+}
+
+/**
+ * The thread split into turns, cut at each user message. Deliberately the same
+ * shape as a POST /api/chat response minus the thread id, so a client renders
+ * replayed history and a live reply through one code path.
+ *
+ * Anything before the first user message is dropped. In practice there is
+ * nothing there: the system prompt is rebuilt per model call by
+ * `dynamicSystemPromptMiddleware` and never enters state.
+ */
+export function turnsOf(messages: BaseMessage[] | undefined): ChatTurn[] {
+  if (!messages) return [];
+
+  const turns: ChatTurn[] = [];
+  let asked: string | null = null;
+  let since: BaseMessage[] = [];
+
+  const flush = () => {
+    if (asked === null) return;
+    turns.push({ message: asked, reply: replyOf(since), actions: actionsOf(since) });
+  };
+
+  for (const message of messages) {
+    if (HumanMessage.isInstance(message)) {
+      flush();
+      asked = message.text;
+      since = [];
+      continue;
+    }
+    since.push(message);
+  }
+  flush();
+
+  return turns;
 }

@@ -28,6 +28,8 @@ export const ERRORS = {
     "I couldn't finish that in a reasonable number of steps. Could you narrow it down?",
   AGENT_UNAVAILABLE: 'The assistant is temporarily unavailable. Please try again.',
   THREAD_BUSY: 'Another message on this conversation is still being processed',
+  THREAD_NOT_FOUND: 'Conversation not found',
+  THREAD_ID_INVALID: 'thread_id must be a UUID',
 } as const;
 
 /** Messages that need runtime detail interpolated into them. */

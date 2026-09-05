@@ -51,6 +51,8 @@ src/
 │   ├── agent.ts                   buildAgent(env), recursion limit, thread config
 │   ├── model.ts                   ChatGroq construction
 │   ├── prompt.ts                  system prompt, rebuilt per model call
+│   ├── state.ts                   agent state: the messages channel and reducer
+│   ├── history.ts                 a thread read back out of the checkpoint
 │   ├── checkpointer.ts            D1Saver: the saver, minus its per-request DDL
 │   ├── runs.ts                    run keys, claim/complete/fail, TTL
 │   ├── taskId.ts                  task id derived from a tool call id
@@ -189,6 +191,32 @@ exact — send the header if the client retries on timeouts.
 Only one turn runs on a thread at a time; a second concurrent request gets
 `409`.
 
+### `GET /api/chat/:thread_id`
+
+The conversation so far, as turns:
+
+```sh
+curl http://localhost:8787/api/chat/0199...
+```
+
+```json
+{
+  "thread_id": "0199...",
+  "turns": [
+    {
+      "message": "Add a task to renew the domain by Friday",
+      "reply": "Added \"Renew the domain\", due 11 September.",
+      "actions": [{ "tool": "create_task", "ok": true, "task": { "...": "..." } }]
+    }
+  ]
+}
+```
+
+Each turn has the same shape as a `POST /api/chat` response, so a client can
+render replayed history and a live reply with one code path. It reads the
+checkpoint directly: no run is claimed, the model is never called, and a thread
+whose last turn failed still reads back. `404` if the thread has no checkpoint.
+
 ### `GET /health`
 
 ```json
@@ -200,7 +228,7 @@ Only one turn runs on a thread at a time; a second concurrent request gets
 | Status | Meaning                                                           |
 | ------ | ----------------------------------------------------------------- |
 | 400    | Malformed JSON, or Zod validation failed (`issues` included)       |
-| 404    | Unknown route, or an unknown task id on `PATCH`/`GET /:id`         |
+| 404    | Unknown route, an unknown task id, or an unknown `thread_id`       |
 | 409    | Another turn is already running on this `thread_id`                |
 | 500    | `GROQ_API_KEY` unset, or an unexpected failure                     |
 | 502    | Groq unreachable or returned an error                              |
@@ -214,6 +242,10 @@ finish and `actions` lists what did run.
 
 - **Bounded loop.** At most 5 tool rounds per turn, enforced by LangGraph's
   recursion limit.
+- **Memory is the message list.** `src/agent/state.ts` declares one state
+  channel, `messages`, backed by LangGraph's `MessagesValue`. Its reducer
+  appends and replaces-by-id, and the checkpointer writes the whole list on
+  every super-step, so the newest checkpoint alone reconstructs the thread.
 - **One tool call at a time.** `parallel_tool_calls: false` is sent to Groq, so
   a search and an update are never proposed in the same round.
 - **Read before write.** `update_task` only accepts an id that appeared in a
@@ -300,9 +332,14 @@ database.
 - **More agent tools** — add a file under `src/agent/tools/` and register it in
   `tools/index.ts`. Every tool validates with Zod, goes through a service rather
   than straight to D1, and returns a compact JSON envelope.
-- **Long conversations** — `summarizationMiddleware` or `trimMessages` in a
-  `wrapModelCall` caps what the model sees. Checkpoint rows are already pruned
-  to the newest three per thread after every turn.
+- **Long conversations** — nothing caps context yet: every turn ships the whole
+  history to Groq. Cap it in a `wrapModelCall`, which rewrites only the model
+  payload — `contextEditingMiddleware` with `ClearToolUsesEdit` fits, since the
+  bulk is old tool-result JSON. Not `summarizationMiddleware`: it returns
+  `RemoveMessage({ id: REMOVE_ALL_MESSAGES })` and so rewrites persisted state,
+  which would delete the tool results `taskIdGuard` reads ids from and the
+  message ids `turnAfter` looks for. Checkpoint *rows* are already pruned to the
+  newest three per thread, which costs no history.
 - **Strict concurrency** — the run claim bounds it, but its TTL is the weak
   point. Moving the graph into a Durable Object is the structural fix.
 - **Auth** — Hono middleware in `index.ts`, ahead of the route mounts.

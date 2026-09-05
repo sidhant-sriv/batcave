@@ -3,7 +3,8 @@ import { GraphRecursionError } from '@langchain/langgraph';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { buildAgent, threadConfig, type AgentOptions } from '../agent/agent';
-import { actionsOf, replyOf, turnAfter, type AgentAction } from '../agent/format';
+import { actionsOf, replyOf, turnAfter, type AgentAction, type ChatTurn } from '../agent/format';
+import { threadHistory } from '../agent/history';
 import { CHECKPOINTS_KEPT, claim, complete, fail, runKey } from '../agent/runs';
 import { pruneThread } from '../db/agentState';
 import { ERRORS } from '../errors';
@@ -19,6 +20,11 @@ export interface ChatResponse {
   thread_id: string;
   reply: string | null;
   actions: AgentAction[];
+}
+
+export interface ThreadHistoryResponse {
+  thread_id: string;
+  turns: ChatTurn[];
 }
 
 /**
@@ -131,6 +137,23 @@ export function createChatRoute(options: AgentOptions = {}) {
       await fail(c.env.DB, key, error);
       throw error;
     }
+  });
+
+  /**
+   * The conversation so far. Reads the checkpoint directly, so it does not
+   * claim a run, does not touch the model and works on a thread whose last
+   * turn failed.
+   */
+  chatRoute.get('/:thread_id', async (c) => {
+    const threadId = c.req.param('thread_id');
+    if (!z.uuid().safeParse(threadId).success) {
+      return c.json({ error: ERRORS.THREAD_ID_INVALID }, 400);
+    }
+
+    const turns = await threadHistory(c.env.DB, threadId);
+    if (!turns) return c.json({ error: ERRORS.THREAD_NOT_FOUND }, 404);
+
+    return c.json({ thread_id: threadId, turns } satisfies ThreadHistoryResponse);
   });
 
   return chatRoute;

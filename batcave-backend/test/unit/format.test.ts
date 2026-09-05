@@ -1,6 +1,6 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
-import { actionsOf, replyOf, taskIdsIn, turnAfter } from '../../src/agent/format';
+import { actionsOf, replyOf, taskIdsIn, turnAfter, turnsOf } from '../../src/agent/format';
 
 const toolMessage = (name: string, payload: unknown) =>
   new ToolMessage({
@@ -88,5 +88,48 @@ describe('turnAfter', () => {
   it('is empty when the turn is not in the transcript', () => {
     expect(turnAfter([new AIMessage('hi')], 'missing')).toEqual([]);
     expect(turnAfter(undefined, 'missing')).toEqual([]);
+  });
+});
+
+describe('turnsOf', () => {
+  it('cuts the transcript at each user message', () => {
+    const turns = turnsOf([
+      new HumanMessage('show me my backend tasks'),
+      toolMessage('search_tasks', { ok: true, tasks: [{ id: 'a' }] }),
+      new AIMessage('I found 1 unfinished task.'),
+      new HumanMessage('mark the first one as done'),
+      toolMessage('update_task', { ok: true, task: { id: 'a' } }),
+      new AIMessage('Marked it done.'),
+    ]);
+
+    expect(turns).toEqual([
+      {
+        message: 'show me my backend tasks',
+        reply: 'I found 1 unfinished task.',
+        actions: [{ tool: 'search_tasks', ok: true, tasks: [{ id: 'a' }] }],
+      },
+      {
+        message: 'mark the first one as done',
+        reply: 'Marked it done.',
+        actions: [{ tool: 'update_task', ok: true, task: { id: 'a' } }],
+      },
+    ]);
+  });
+
+  it('keeps a turn that is still unanswered', () => {
+    expect(turnsOf([new HumanMessage('hello')])).toEqual([
+      { message: 'hello', reply: null, actions: [] },
+    ]);
+  });
+
+  it('drops anything before the first user message', () => {
+    expect(turnsOf([new AIMessage('unprompted'), new HumanMessage('hi')])).toEqual([
+      { message: 'hi', reply: null, actions: [] },
+    ]);
+  });
+
+  it('is empty for a thread with no state', () => {
+    expect(turnsOf(undefined)).toEqual([]);
+    expect(turnsOf([])).toEqual([]);
   });
 });

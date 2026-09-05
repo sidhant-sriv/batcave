@@ -7,6 +7,7 @@ import { sequentialToolCalls } from './middleware/sequentialToolCalls';
 import { taskIdGuard } from './middleware/taskIdGuard';
 import { makeModel } from './model';
 import { systemPrompt, todayUtc } from './prompt';
+import { agentState } from './state';
 import { buildTools } from './tools';
 
 /**
@@ -36,6 +37,7 @@ export function buildAgent(env: Env, options: AgentOptions = {}) {
   return createAgent({
     model: options.model ?? makeModel(env, options.fetch),
     tools: buildTools(service),
+    stateSchema: agentState,
     checkpointer: new D1Saver(env.DB),
     middleware: [
       dynamicSystemPromptMiddleware(() => systemPrompt(todayUtc())),
