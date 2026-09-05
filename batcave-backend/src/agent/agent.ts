@@ -1,95 +1,53 @@
-import type { TaskService } from '../services/taskService';
-import { ERROR_TEMPLATES } from '../errors';
-import type { Task } from '../types/task';
-import { CREATE_TASK_TOOL_NAME, createTaskTool, runCreateTaskTool } from './tools/createTask';
+import { createAgent, dynamicSystemPromptMiddleware } from 'langchain';
+import { TaskService } from '../services/taskService';
+import type { Env } from '../types/task';
+import { D1Saver } from './checkpointer';
+import { escalate } from './middleware/escalate';
+import { sequentialToolCalls } from './middleware/sequentialToolCalls';
+import { taskIdGuard } from './middleware/taskIdGuard';
+import { makeModel } from './model';
+import { systemPrompt, todayUtc } from './prompt';
+import { buildTools } from './tools';
 
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const DEFAULT_MODEL = 'openai/gpt-oss-120b';
+/**
+ * A tool round is two super-steps, model then tools, and the turn ends with one
+ * more model call. The recursion limit is the primitive the runtime already
+ * enforces, so no extra state is needed to bound the loop.
+ */
+export const MAX_TOOL_ROUNDS = 5;
+export const RECURSION_LIMIT = 2 * MAX_TOOL_ROUNDS + 1;
 
-/** Thrown when Groq itself is unreachable or returns an error response. */
-export class GroqError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = 'GroqError';
-  }
-}
-
-interface GroqToolCall {
-  id: string;
-  function: { name: string; arguments: string };
-}
-
-interface GroqResponse {
-  choices?: Array<{
-    message?: { content?: string | null; tool_calls?: GroqToolCall[] };
-  }>;
-}
-
-export interface AgentResult {
-  task: Task | null;
-  message: string | null;
-}
-
-function systemPrompt(): string {
-  const today = new Date().toISOString().slice(0, 10);
-  return [
-    'You are a task management assistant.',
-    `Today is ${today} (UTC).`, // this could be moved to a human message to facilitate prompt caching
-    `When the user asks for a task to be created, call the ${CREATE_TASK_TOOL_NAME} tool.`,
-    'Resolve relative dates like "Friday" or "tomorrow" into absolute YYYY-MM-DD dates.',
-    'If the request is not about creating a task, reply in plain text instead of calling a tool.',
-  ].join(' ');
+export interface AgentOptions {
+  model?: Parameters<typeof createAgent>[0]['model'];
+  fetch?: typeof fetch;
 }
 
 /**
- * Send a user message to Groq with the create_task tool available. Any tool
- * call it makes is validated and executed through TaskService.
+ * Built per request. Tools close over a `TaskService` bound to this request's
+ * D1 binding, and nothing is module-level state that could leak between
+ * requests sharing an isolate.
+ *
+ * Middleware order is outermost first. `escalate` is last so it sits closest to
+ * the tool and classifies what the tool itself raised.
  */
-export async function runAgent(
-  message: string,
-  taskService: TaskService,
-  env: { GROQ_API_KEY: string; GROQ_MODEL?: string },
-): Promise<AgentResult> {
-  let response: Response;
-  try {
-    response = await fetch(GROQ_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${env.GROQ_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: env.GROQ_MODEL ?? DEFAULT_MODEL,
-        messages: [
-          { role: 'system', content: systemPrompt() },
-          { role: 'user', content: message },
-        ],
-        tools: [createTaskTool],
-        tool_choice: 'auto',
-      }),
-    });
-  } catch (error) {
-    throw new GroqError(ERROR_TEMPLATES.groqUnreachable((error as Error).message), 502);
-  }
+export function buildAgent(env: Env, options: AgentOptions = {}) {
+  const service = new TaskService(env.DB);
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new GroqError(ERROR_TEMPLATES.groqBadResponse(response.status, body), 502);
-  }
-
-  const data = (await response.json()) as GroqResponse;
-  const assistant = data.choices?.[0]?.message;
-  const toolCall = assistant?.tool_calls?.find(
-    (call) => call.function.name === CREATE_TASK_TOOL_NAME,
-  );
-
-  if (!toolCall) {
-    return { task: null, message: assistant?.content ?? null };
-  }
-
-  const task = await runCreateTaskTool(toolCall.function.arguments, taskService);
-  return { task, message: assistant?.content ?? null };
+  return createAgent({
+    model: options.model ?? makeModel(env, options.fetch),
+    tools: buildTools(service),
+    checkpointer: new D1Saver(env.DB),
+    middleware: [
+      dynamicSystemPromptMiddleware(() => systemPrompt(todayUtc())),
+      sequentialToolCalls,
+      taskIdGuard,
+      escalate,
+    ],
+  });
 }
+
+/** The one config every call on a thread shares: which thread, and the bound. */
+export const threadConfig = (threadId: string) => ({
+  configurable: { thread_id: threadId },
+  recursionLimit: RECURSION_LIMIT,
+});
