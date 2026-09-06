@@ -117,6 +117,100 @@ describe('TaskService.search', () => {
   });
 });
 
+/**
+ * The schedule a search carries. Rows are written straight to D1 rather than
+ * through ScheduleService, because what is under test is the join, not the
+ * workflow that a real schedule would also start.
+ */
+describe('TaskService.search — schedules', () => {
+  const schedule = (
+    taskId: string,
+    row: Partial<{ kind: string; cron: string | null; next_at: string; status: string }> = {},
+  ) =>
+    env.DB.prepare(
+      `INSERT INTO schedules
+         (id, task_id, kind, cron, next_at, status, notification_count, created_at, ended_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, NULL)`,
+    )
+      .bind(
+        crypto.randomUUID(),
+        taskId,
+        row.kind ?? 'once',
+        row.cron ?? null,
+        row.next_at ?? '2026-09-11T09:00:00.000Z',
+        row.status ?? 'active',
+        '2026-09-06T00:00:00.000Z',
+      )
+      .run();
+
+  it('carries the active schedule, and null when there is none', async () => {
+    const [reminded, plain] = await seed([{ title: 'Renew the domain' }, { title: 'Buy milk' }]);
+    await schedule(reminded!.id);
+
+    const { tasks } = await service().search({});
+    const byTitle = new Map(tasks.map((task) => [task.title, task]));
+
+    expect(byTitle.get('Renew the domain')!.schedule).toEqual({
+      kind: 'once',
+      cron: null,
+      next_at: '2026-09-11T09:00:00.000Z',
+    });
+    expect(byTitle.get('Buy milk')!.schedule).toBeNull();
+  });
+
+  it('reports a recurring schedule with its cron', async () => {
+    const [task] = await seed([{ title: 'Water the plants' }]);
+    await schedule(task!.id, { kind: 'recurring', cron: '0 9 * * 1' });
+
+    const { tasks } = await service().search({});
+    expect(tasks[0]!.schedule).toMatchObject({ kind: 'recurring', cron: '0 9 * * 1' });
+  });
+
+  it('ignores a cancelled schedule: it notifies nobody', async () => {
+    const [task] = await seed([{ title: 'Renew the domain' }]);
+    await schedule(task!.id, { status: 'cancelled' });
+
+    const { tasks } = await service().search({});
+    expect(tasks[0]!.schedule).toBeNull();
+    expect((await service().search({ scheduled: true })).tasks).toHaveLength(0);
+  });
+
+  it('filters both ways on scheduled, and includes both when it is omitted', async () => {
+    const [reminded] = await seed([{ title: 'Renew the domain' }, { title: 'Buy milk' }]);
+    await schedule(reminded!.id);
+
+    expect((await service().search({ scheduled: true })).tasks.map((t) => t.title)).toEqual([
+      'Renew the domain',
+    ]);
+    expect((await service().search({ scheduled: false })).tasks.map((t) => t.title)).toEqual([
+      'Buy milk',
+    ]);
+    expect((await service().search({})).tasks).toHaveLength(2);
+  });
+
+  it('narrows together with the other filters rather than replacing them', async () => {
+    const [open, done] = await seed([
+      { title: 'Renew the domain' },
+      { title: 'Write backend tests', status: 'done' },
+    ]);
+    await schedule(open!.id);
+    await schedule(done!.id, { kind: 'recurring', cron: '0 9 * * 1' });
+
+    const { tasks } = await service().search({ scheduled: true, status: ['done'] });
+    expect(tasks.map((task) => task.title)).toEqual(['Write backend tests']);
+  });
+
+  it('takes scheduled as a query param on GET /api/tasks', async () => {
+    const [reminded] = await seed([{ title: 'Renew the domain' }, { title: 'Buy milk' }]);
+    await schedule(reminded!.id);
+
+    const body = await json(await SELF.fetch('https://test/api/tasks?scheduled=true'));
+    expect(body.tasks).toHaveLength(1);
+    expect(body.tasks[0].title).toBe('Renew the domain');
+    expect(body.tasks[0].schedule.next_at).toBe('2026-09-11T09:00:00.000Z');
+  });
+});
+
 describe('TaskService.update', () => {
   it('changes only the fields it is given', async () => {
     const [task] = await seed([{ title: 'Ship it', description: 'keep me', priority: 'low' }]);

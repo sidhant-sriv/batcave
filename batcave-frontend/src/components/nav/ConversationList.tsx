@@ -5,30 +5,42 @@ import { DropdownMenu } from 'radix-ui';
 import { ApiError } from '@/api/client';
 import { createChat, deleteChat, listChats, renameChat } from '@/api/chats';
 import type { ChatRow } from '@/api/types';
-import { Button, IconButton } from '@/components/primitives/Button';
+import { IconButton } from '@/components/primitives/Button';
 import { ConfirmDialog } from '@/components/primitives/Modal';
 import { EmptyState, ErrorBanner, LoadingRows } from '@/components/state/States';
 import { cn } from '@/lib/cn';
 import { relativeTime } from '@/lib/time';
 
 /**
- * Conversations, newest first.
+ * Conversations, newest first, inside the navigator.
  *
  * A chat names itself after its first message and counts its own turns, so this
  * list needs no extra reads — `turn_count` exists precisely so that listing
  * conversations never decodes a checkpoint. An untitled chat is one that has
  * not been answered yet; it says UNTITLED rather than rendering an empty row,
  * because an absent name is information.
+ *
+ * It lives in the navigator rather than beside the console because a
+ * conversation is a thing you pick, like a view — not a thing the console is
+ * responsible for managing while you are reading one.
  */
 
 interface Props {
   activeChatId: string | null;
   onSelect: (chatId: string) => void;
-  onNew: () => void;
+  /** Called when the conversation being deleted is the one that was open. */
+  onCleared: () => void;
+  touch?: boolean;
   className?: string;
 }
 
-export function ChatList({ activeChatId, onSelect, onNew, className }: Props) {
+export function ConversationList({
+  activeChatId,
+  onSelect,
+  onCleared,
+  touch = false,
+  className,
+}: Props) {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState<ChatRow | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -53,37 +65,31 @@ export function ChatList({ activeChatId, onSelect, onNew, className }: Props) {
     onSuccess: async (_result, id) => {
       setConfirming(null);
       await queryClient.invalidateQueries({ queryKey: ['chats'] });
-      if (id === activeChatId) onNew();
+      if (id === activeChatId) onCleared();
     },
   });
 
   return (
-    <aside
-      className={cn(
-        'flex w-[var(--chatlist-w)] shrink-0 flex-col border-r border-divider bg-app',
-        className,
-      )}
-    >
+    <div className={cn('flex min-h-0 flex-1 flex-col border-t border-divider', className)}>
       <header
         className={cn(
-          'flex h-[var(--shell-header-h)] shrink-0 items-center justify-between',
-          'border-b border-divider px-[var(--chatitem-pad-x)]',
+          'flex shrink-0 items-center justify-between',
+          'px-[var(--nav-pad-x)] font-mono text-micro uppercase text-disabled',
+          touch ? 'h-[40px]' : 'h-[32px]',
         )}
       >
-        <span className="font-mono text-micro uppercase text-muted">Conversations</span>
-        <Button
-          size="sm"
-          variant="ghost"
-          icon={<Plus size={14} strokeWidth={1.5} />}
+        <span>Conversations</span>
+        <IconButton
+          title="New conversation"
           onClick={() => create.mutate()}
           disabled={create.isPending}
         >
-          New
-        </Button>
+          <Plus size={14} strokeWidth={1.5} />
+        </IconButton>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {chats.isLoading ? <LoadingRows rows={5} /> : null}
+        {chats.isLoading ? <LoadingRows rows={4} /> : null}
 
         {chats.isError ? (
           <ErrorBanner
@@ -97,17 +103,18 @@ export function ChatList({ activeChatId, onSelect, onNew, className }: Props) {
           <EmptyState
             label="No conversations"
             message="Start one to give the agent something to do."
-            className="py-[var(--space-8)]"
+            className="py-[var(--space-6)]"
           />
         ) : null}
 
         <ul>
           {chats.data?.chats.map((chat) => (
-            <ChatListItem
+            <ConversationItem
               key={chat.id}
               chat={chat}
               active={chat.id === activeChatId}
               renaming={renaming === chat.id}
+              touch={touch}
               onSelect={() => onSelect(chat.id)}
               onStartRename={() => setRenaming(chat.id)}
               onRename={(title) => {
@@ -122,7 +129,7 @@ export function ChatList({ activeChatId, onSelect, onNew, className }: Props) {
         </ul>
 
         {chats.data?.truncated ? (
-          <p className="px-[var(--chatitem-pad-x)] py-[var(--space-3)] font-mono text-micro uppercase text-disabled">
+          <p className="px-[var(--nav-pad-x)] py-[var(--space-3)] font-mono text-micro uppercase text-disabled">
             Showing {chats.data.chats.length} · more exist
           </p>
         ) : null}
@@ -151,7 +158,7 @@ export function ChatList({ activeChatId, onSelect, onNew, className }: Props) {
         }
         onConfirm={() => confirming && remove.mutate(confirming.id)}
       />
-    </aside>
+    </div>
   );
 }
 
@@ -159,21 +166,25 @@ interface ItemProps {
   chat: ChatRow;
   active: boolean;
   renaming: boolean;
+  touch: boolean;
   onSelect: () => void;
   onStartRename: () => void;
   onRename: (title: string | null) => void;
   onDelete: () => void;
 }
 
-function ChatListItem({
+function ConversationItem({
   chat,
   active,
   renaming,
+  touch,
   onSelect,
   onStartRename,
   onRename,
   onDelete,
 }: ItemProps) {
+  const height = touch ? 'min-h-[56px]' : 'min-h-[var(--chatitem-h)]';
+
   return (
     <li
       className={cn(
@@ -208,8 +219,8 @@ function ChatListItem({
             }
           }}
           className={cn(
-            'min-h-[var(--chatitem-h)] w-full bg-well px-[var(--chatitem-pad-x)]',
-            'font-prose text-body-sm text-primary',
+            height,
+            'w-full bg-well px-[var(--nav-pad-x)] font-prose text-body-sm text-primary',
           )}
         />
       ) : (
@@ -218,8 +229,9 @@ function ChatListItem({
             type="button"
             onClick={onSelect}
             className={cn(
-              'flex min-h-[var(--chatitem-h)] min-w-0 flex-1 flex-col justify-center gap-[2px]',
-              'px-[var(--chatitem-pad-x)] py-[var(--space-1)] text-left',
+              height,
+              'flex min-w-0 flex-1 flex-col justify-center gap-[2px]',
+              'px-[var(--nav-pad-x)] py-[var(--space-1)] text-left',
             )}
           >
             {chat.title ? (
@@ -249,7 +261,11 @@ function ChatListItem({
             <DropdownMenu.Trigger asChild>
               <IconButton
                 title="Conversation actions"
-                className="mr-[var(--space-1)] opacity-0 group-hover:opacity-100 data-[state=open]:opacity-100"
+                className={cn(
+                  'mr-[var(--space-1)] data-[state=open]:opacity-100',
+                  // Hover-to-reveal needs a hover, and a touch screen has none.
+                  touch ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                )}
               >
                 <MoreHorizontal size={14} strokeWidth={1.5} />
               </IconButton>

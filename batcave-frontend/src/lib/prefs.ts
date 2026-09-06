@@ -88,3 +88,36 @@ export function useDensity(): [Density, (density: Density) => void] {
   const update = useCallback((next: Density) => setDensity(next), []);
   return [density, update];
 }
+
+/* --- Console dock -------------------------------------------------------- */
+
+/**
+ * Whether the console is docked beside the surface.
+ *
+ * Persisted, and defaulting to open: the console being present is the shell's
+ * premise, not an opt-in. It is remembered because someone who closes it has
+ * decided they want the width for the table, and re-opening it on every reload
+ * would be arguing with them.
+ *
+ * This governs only the docked pane. On a phone the console is an overlay, and
+ * an overlay that restored itself over the task list on load would hide the
+ * thing the user opened the app to see.
+ */
+
+const CONSOLE_KEY = 'batcave.console';
+const CONSOLE_STATES = ['open', 'closed'] as const;
+
+export function getConsoleOpen(): boolean {
+  return read(CONSOLE_KEY, CONSOLE_STATES, 'open') === 'open';
+}
+
+export function setConsoleOpen(open: boolean): void {
+  write(CONSOLE_KEY, open ? 'open' : 'closed');
+  emit();
+}
+
+export function useConsoleOpen(): [boolean, (open: boolean) => void] {
+  const open = useSyncExternalStore(subscribe, getConsoleOpen, () => true);
+  const update = useCallback((next: boolean) => setConsoleOpen(next), []);
+  return [open, update];
+}

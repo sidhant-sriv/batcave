@@ -20,7 +20,7 @@ export const scheduleRecurringTool = (schedules: ScheduleService, tasks: TaskSer
     {
       name: SCHEDULE_RECURRING,
       description:
-        'Notify the user about a task on a repeating schedule, until they cancel it. `cron` is a five-field expression evaluated in UTC: "0 9 * * 1" is every Monday at 09:00, "0 18 * * *" every day at 18:00, "0 9 1 * *" the first of each month. It must not fire more often than every 15 minutes. `id` must come from a search_tasks or create_task result in this conversation. A task has one schedule: this replaces any existing one. Each notification puts the task back to todo if it was done, so it works as a recurring chore.',
+        'Notify the user about a task over and over on a cron schedule, for "every Monday" or "daily at 6pm", until they cancel it. Unlike a one-off reminder this does change the task: every notification puts it back to todo if it was done, which is what makes it a recurring chore rather than a nag. A task has at most one schedule, so this replaces whatever it had — the result reports the new schedule and, in `replaced`, the one it superseded, which is worth telling the user about.',
       schema: scheduleRecurringToolSchema,
     },
   );

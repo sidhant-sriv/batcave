@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { Columns3, List, Plus } from 'lucide-react';
 import { listTasks, TASK_LIMIT_MAX } from '@/api/tasks';
 import type { AnyTask, Task, TaskPriority, TaskStatus } from '@/api/types';
 import { Button, IconButton } from '@/components/primitives/Button';
+import { NavToggle } from '@/components/nav/NavToggle';
 import { EmptyState, ErrorState, LoadingRows } from '@/components/state/States';
 import { TaskCard } from '@/components/task/TaskCard';
 import { TaskCreateForm } from '@/components/task/TaskCreateForm';
@@ -11,10 +13,19 @@ import { TaskDetailModal } from '@/components/task/TaskDetailModal';
 import { TaskRow } from '@/components/task/TaskRow';
 import { STATUS_LABELS } from '@/components/task/StatusPill';
 import { cn } from '@/lib/cn';
+import { todayUtc } from '@/lib/dueDate';
 import { useDensity } from '@/lib/prefs';
+import { useSchedulesByTask } from '@/lib/schedules';
+import { useShell } from '@/lib/shell';
+import { viewOf } from '@/lib/views';
 
 /**
  * The deterministic surface.
+ *
+ * Which rows it shows is the navigator's business: `?view=` names a saved view,
+ * and the view owns the filter that fetches it. What stays here is the
+ * narrowing you do inside a view — a keyword, a priority — because that is a
+ * question about these rows rather than about which rows.
  *
  * Ordering is fixed server-side — dated first, then due date ascending, then
  * priority, then age — so there is no sort control here. Offering one that the
@@ -44,6 +55,8 @@ const PRIORITY_FILTERS: Array<{ value: TaskPriority | 'all'; label: string }> = 
 const BOARD_COLUMNS: TaskStatus[] = ['todo', 'in_progress', 'done'];
 
 export function TaskIndex() {
+  const [searchParams] = useSearchParams();
+  const { layout } = useShell();
   const [density, setDensity] = useDensity();
   const [view, setView] = useState<'list' | 'board'>('list');
   const [status, setStatus] = useState<TaskStatus | 'all'>('all');
@@ -52,15 +65,26 @@ export function TaskIndex() {
   const [creating, setCreating] = useState(false);
   const [openTask, setOpenTask] = useState<Task | null>(null);
 
-  const filters = useMemo(
-    () => ({
+  const saved = viewOf(searchParams.get('view'));
+  const narrow = layout === 'narrow';
+  const schedules = useSchedulesByTask();
+
+  /*
+   * The saved view's filter is the floor, and the header can only narrow it
+   * further. The status control is therefore hidden outside the All view: in a
+   * view called Done, a status filter is either a no-op or a contradiction.
+   */
+  const filters = useMemo(() => {
+    const base = saved.filters(todayUtc());
+
+    return {
       limit: TASK_LIMIT_MAX,
-      ...(status === 'all' ? {} : { status: [status] }),
+      ...base,
+      ...(saved.id === 'all' && status !== 'all' ? { status: [status] } : {}),
       ...(priority === 'all' ? {} : { priority: [priority] }),
       ...(query.trim() ? { query: query.trim() } : {}),
-    }),
-    [status, priority, query],
-  );
+    };
+  }, [saved, status, priority, query]);
 
   const tasks = useQuery({
     queryKey: ['tasks', filters],
@@ -75,75 +99,97 @@ export function TaskIndex() {
 
   const comfy = density === 'comfy';
   const rows = tasks.data?.tasks ?? [];
+  const filtered = Boolean(query) || status !== 'all' || priority !== 'all';
+
+  // The schedule column costs a fixed 132px. Below the wide breakpoint the
+  // title needs that more than the table does, and the glyph still marks the
+  // row — so the column goes and the information does not.
+  const showSchedule = layout === 'wide';
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <header
         className={cn(
-          'flex h-[var(--shell-header-h)] shrink-0 items-center gap-[var(--space-4)]',
-          'border-b border-divider px-[var(--space-4)]',
+          'flex h-[var(--shell-header-h)] shrink-0 items-center gap-[var(--space-3)]',
+          'overflow-hidden border-b border-divider px-[var(--space-4)]',
         )}
       >
-        <h1 className="font-mono text-micro uppercase text-muted">Tasks</h1>
+        <NavToggle />
+
+        <h1 className="flex shrink-0 items-center gap-[var(--space-2)] whitespace-nowrap">
+          <span className="font-prose text-body-sm text-primary">{saved.label}</span>
+          <span className="font-mono text-micro text-disabled">{rows.length}</span>
+        </h1>
 
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Filter by keyword"
           className={cn(
-            'h-[24px] w-[200px] rounded-xs border border-control bg-well px-[var(--space-2)]',
+            'h-[24px] rounded-xs border border-control bg-well px-[var(--space-2)]',
             'font-prose text-body-sm text-primary placeholder:text-disabled',
             'hover:border-strong focus:border-focus',
+            // On a phone the keyword box takes whatever the row has left, and
+            // the segmented filters are gone: the navigator's views cover
+            // status, and priority is legible from the rail on every row.
+            narrow ? 'min-w-0 flex-1' : 'w-[132px] shrink-0 xl:w-[200px]',
           )}
         />
 
-        <SegmentedControl
-          label="Status"
-          options={STATUS_FILTERS}
-          value={status}
-          onChange={setStatus}
-        />
-        <SegmentedControl
-          label="Priority"
-          options={PRIORITY_FILTERS}
-          value={priority}
-          onChange={setPriority}
-        />
+        {saved.id === 'all' && !narrow ? (
+          <SegmentedControl
+            label="Status"
+            options={STATUS_FILTERS}
+            value={status}
+            onChange={setStatus}
+          />
+        ) : null}
 
-        <div className="ml-auto flex items-center gap-[var(--space-2)]">
-          <IconButton
-            title="List view"
-            active={view === 'list'}
-            onClick={() => setView('list')}
-          >
-            <List size={16} strokeWidth={1.5} />
-          </IconButton>
-          <IconButton
-            title="Board view"
-            active={view === 'board'}
-            onClick={() => setView('board')}
-          >
-            <Columns3 size={16} strokeWidth={1.5} />
-          </IconButton>
+        {narrow ? null : (
+          <SegmentedControl
+            label="Priority"
+            options={PRIORITY_FILTERS}
+            value={priority}
+            onChange={setPriority}
+          />
+        )}
 
-          <button
-            type="button"
-            onClick={() => setDensity(comfy ? 'dense' : 'comfy')}
-            title="Toggle row density"
-            className={cn(
-              'h-[24px] rounded-xs border border-control px-[var(--space-2)]',
-              'font-mono text-micro uppercase text-secondary hover:bg-hover hover:text-primary',
-            )}
-          >
-            {comfy ? 'Comfy' : 'Dense'}
-          </button>
+        <div className="ml-auto flex shrink-0 items-center gap-[var(--space-2)]">
+          {narrow ? null : (
+            <>
+              <IconButton title="List view" active={view === 'list'} onClick={() => setView('list')}>
+                <List size={16} strokeWidth={1.5} />
+              </IconButton>
+              <IconButton
+                title="Board view"
+                active={view === 'board'}
+                onClick={() => setView('board')}
+              >
+                <Columns3 size={16} strokeWidth={1.5} />
+              </IconButton>
+            </>
+          )}
+
+          {layout === 'wide' ? (
+            <button
+              type="button"
+              onClick={() => setDensity(comfy ? 'dense' : 'comfy')}
+              title="Toggle row density"
+              className={cn(
+                'h-[24px] rounded-xs border border-control px-[var(--space-2)]',
+                'font-mono text-micro uppercase text-secondary hover:bg-hover hover:text-primary',
+              )}
+            >
+              {comfy ? 'Comfy' : 'Dense'}
+            </button>
+          ) : null}
 
           <Button
             variant="primary"
             icon={<Plus size={14} strokeWidth={1.5} />}
             onClick={() => setCreating(true)}
           >
-            New task
+            {narrow ? 'New' : 'New task'}
           </Button>
         </div>
       </header>
@@ -156,11 +202,13 @@ export function TaskIndex() {
 
           {tasks.isSuccess && rows.length === 0 ? (
             <EmptyState
-              label="No tasks"
+              label={saved.id === 'all' ? 'No tasks' : `Nothing in ${saved.label.toLowerCase()}`}
               message={
-                query || status !== 'all' || priority !== 'all'
+                filtered
                   ? 'Nothing matched these filters. Widen them, or create a task.'
-                  : 'Nothing here yet. Create a task, or ask the agent to.'
+                  : saved.id === 'all'
+                    ? 'Nothing here yet. Create a task, or ask the agent to.'
+                    : 'Nothing is in this view right now.'
               }
               action={
                 <Button variant="ghost" onClick={() => setCreating(true)}>
@@ -170,15 +218,19 @@ export function TaskIndex() {
             />
           ) : null}
 
-          {tasks.isSuccess && rows.length > 0 && view === 'list' ? (
+          {tasks.isSuccess && rows.length > 0 && (view === 'list' || narrow) ? (
             <>
-              <ColumnHeaders comfy={comfy} />
+              {narrow ? null : <ColumnHeaders comfy={comfy} showSchedule={showSchedule} />}
               <div>
                 {rows.map((task) => (
                   <TaskRow
                     key={task.id}
                     task={task}
                     comfy={comfy}
+                    stacked={narrow}
+                    schedule={schedules.get(task.id) ?? null}
+                    showSchedule={showSchedule}
+                    showUpdated={layout !== 'medium'}
                     selected={task.id === openTask?.id}
                     onOpen={(candidate) => setOpenTask(candidate as Task)}
                   />
@@ -187,7 +239,7 @@ export function TaskIndex() {
             </>
           ) : null}
 
-          {tasks.isSuccess && rows.length > 0 && view === 'board' ? (
+          {tasks.isSuccess && rows.length > 0 && view === 'board' && !narrow ? (
             <Board tasks={rows} onOpen={(task) => setOpenTask(task as Task)} />
           ) : null}
 
@@ -201,6 +253,9 @@ export function TaskIndex() {
               Showing {rows.length} · more matched — narrow the filter
             </p>
           ) : null}
+
+          {/* The console's bar sits over the bottom of this list on a phone. */}
+          {narrow ? <div aria-hidden className="h-[56px]" /> : null}
         </div>
       </div>
 
@@ -211,7 +266,7 @@ export function TaskIndex() {
 }
 
 /** Micro-labels over the columns, so a dense list still reads as a table. */
-function ColumnHeaders({ comfy }: { comfy: boolean }) {
+function ColumnHeaders({ comfy, showSchedule }: { comfy: boolean; showSchedule: boolean }) {
   return (
     <div
       className={cn(
@@ -225,8 +280,11 @@ function ColumnHeaders({ comfy }: { comfy: boolean }) {
       <span className="w-[var(--priority-rail-w)]" />
       <span className="ml-[var(--space-1)] w-[var(--task-col-status)]">Status</span>
       <span className="min-w-0 flex-1">Title</span>
+      {showSchedule ? (
+        <span className="w-[var(--task-col-sched)] text-right">Schedule</span>
+      ) : null}
       <span className="w-[var(--task-col-due)] text-right">Due</span>
-      <span className="w-[var(--task-col-updated)] text-right">Updated</span>
+      <span className="hidden w-[var(--task-col-updated)] text-right xl:block">Updated</span>
     </div>
   );
 }
@@ -275,7 +333,7 @@ function SegmentedControl<T extends string>({ label, options, value, onChange }:
     <div
       role="group"
       aria-label={label}
-      className="flex items-center overflow-hidden rounded-xs border border-control"
+      className="flex shrink-0 items-center overflow-hidden rounded-xs border border-control"
     >
       {options.map((option) => (
         <button

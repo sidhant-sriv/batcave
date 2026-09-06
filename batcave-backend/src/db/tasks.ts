@@ -1,4 +1,4 @@
-import type { Task } from '../types/task';
+import type { Task, TaskScheduleSummary, TaskWithSchedule } from '../types/task';
 import { ERRORS } from '../errors';
 import type { SearchTasksFilters, UpdateTaskData } from '../schemas/task';
 
@@ -108,10 +108,43 @@ export function searchTerms(query: string | null | undefined): string[] {
 const likePattern = (term: string) => `%${term.replace(/[\\%_]/g, '\\$&')}%`;
 
 /**
+ * The active schedule, joined in rather than fetched per row. A task listing
+ * that cannot say which rows notify the user forces the agent to answer
+ * "what is scheduled?" from due dates, which are a different thing entirely.
+ * The partial unique index on `(task_id) WHERE status = 'active'` is what keeps
+ * this join from multiplying rows.
+ */
+const SCHEDULE_JOIN =
+  "LEFT JOIN schedules s ON s.task_id = t.id AND s.status = 'active'";
+
+/** Only the three columns that describe when it fires; aliased so `t.*` is safe. */
+const SCHEDULE_COLUMNS = 's.kind AS s_kind, s.cron AS s_cron, s.next_at AS s_next_at';
+
+type ScheduleColumns = {
+  s_kind: TaskScheduleSummary['kind'] | null;
+  s_cron: string | null;
+  s_next_at: string | null;
+};
+
+/** A left join yields nulls for a task with no active schedule; that is the answer. */
+function splitSchedule(row: Task & ScheduleColumns): TaskWithSchedule {
+  const { s_kind, s_cron, s_next_at, ...task } = row;
+
+  return {
+    ...task,
+    schedule:
+      s_kind === null || s_next_at === null
+        ? null
+        : { kind: s_kind, cron: s_cron, next_at: s_next_at },
+  };
+}
+
+/**
  * Pure so it can be unit tested without D1. Every filter is optional and they
  * AND together; each free-text term must match the title or the description.
- * One extra row is requested so the caller can report truncation without a
- * second COUNT query.
+ * Columns are qualified because the schedule join brings a second `status`,
+ * `created_at` and `id` into scope. One extra row is requested so the caller
+ * can report truncation without a second COUNT query.
  */
 export function buildSearchQuery(filters: SearchTasksFilters): {
   sql: string;
@@ -121,27 +154,33 @@ export function buildSearchQuery(filters: SearchTasksFilters): {
   const binds: unknown[] = [];
 
   if (filters.status?.length) {
-    clauses.push(`status IN (${filters.status.map(() => '?').join(', ')})`);
+    clauses.push(`t.status IN (${filters.status.map(() => '?').join(', ')})`);
     binds.push(...filters.status);
   }
 
   if (filters.priority?.length) {
-    clauses.push(`priority IN (${filters.priority.map(() => '?').join(', ')})`);
+    clauses.push(`t.priority IN (${filters.priority.map(() => '?').join(', ')})`);
     binds.push(...filters.priority);
   }
 
   if (filters.due_from) {
-    clauses.push('due_date >= ?');
+    clauses.push('t.due_date >= ?');
     binds.push(filters.due_from);
   }
 
   if (filters.due_to) {
-    clauses.push('due_date <= ?');
+    clauses.push('t.due_date <= ?');
     binds.push(filters.due_to);
   }
 
+  // Presence of the joined row, not a column of the task: a schedule lives in
+  // its own table, so "is it scheduled" is answered by whether the join matched.
+  if (filters.scheduled !== undefined) {
+    clauses.push(filters.scheduled ? 's.id IS NOT NULL' : 's.id IS NULL');
+  }
+
   for (const term of searchTerms(filters.query)) {
-    clauses.push(`(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')`);
+    clauses.push(`(t.title LIKE ? ESCAPE '\\' OR t.description LIKE ? ESCAPE '\\')`);
     const pattern = likePattern(term);
     binds.push(pattern, pattern);
   }
@@ -151,12 +190,14 @@ export function buildSearchQuery(filters: SearchTasksFilters): {
 
   return {
     sql:
-      `SELECT * FROM tasks${where}\n` +
+      `SELECT t.*, ${SCHEDULE_COLUMNS}\n` +
+      `FROM tasks t\n` +
+      `${SCHEDULE_JOIN}${where}\n` +
       `ORDER BY\n` +
-      `  due_date IS NULL,\n` +
-      `  due_date ASC,\n` +
-      `  CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,\n` +
-      `  created_at ASC\n` +
+      `  t.due_date IS NULL,\n` +
+      `  t.due_date ASC,\n` +
+      `  CASE t.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,\n` +
+      `  t.created_at ASC\n` +
       `LIMIT ?`,
     binds,
   };
@@ -165,13 +206,13 @@ export function buildSearchQuery(filters: SearchTasksFilters): {
 export async function searchTasks(
   db: D1Database,
   filters: SearchTasksFilters,
-): Promise<{ tasks: Task[]; truncated: boolean }> {
+): Promise<{ tasks: TaskWithSchedule[]; truncated: boolean }> {
   const { sql, binds } = buildSearchQuery(filters);
   const result = await db
     .prepare(sql)
     .bind(...binds)
-    .all<Task>();
+    .all<Task & ScheduleColumns>();
 
-  const rows = result.results ?? [];
+  const rows = (result.results ?? []).map(splitSchedule);
   return { tasks: rows.slice(0, filters.limit), truncated: rows.length > filters.limit };
 }

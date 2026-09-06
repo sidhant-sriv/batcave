@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { changedFields } from '@/api/tasks';
 import type { ChatTurn, Task } from '@/api/types';
+import { describeCron } from './cron';
 import { disambiguationOf } from './disambiguation';
 import { dueBucket, dueLabel, formatDate } from './dueDate';
 import { ordinalLabel, ordinalPhrase } from './ordinals';
 import { formatInstant, relativeTime } from './time';
+import { countsOf, dayBefore, viewOf } from './views';
 
 /**
  * The logic that decides what the interface says, tested without React or the
@@ -202,5 +204,71 @@ describe('relativeTime', () => {
     expect(relativeTime('2026-09-05T09:00:00.000Z', now)).toBe('3H AGO');
     expect(relativeTime('2026-09-03T12:00:00.000Z', now)).toBe('2D AGO');
     expect(relativeTime('2026-08-01T12:00:00.000Z', now)).toBe('1 AUG');
+  });
+});
+
+describe('describeCron', () => {
+  it('reads the shapes the agent writes', () => {
+    expect(describeCron('0 16 * * 5')).toBe('Every FRI 16:00');
+    expect(describeCron('30 9 * * 1,3')).toBe('Every MON, WED 09:30');
+    expect(describeCron('0 9 * * 1,2,3,4,5')).toBe('Weekdays 09:00');
+    expect(describeCron('0 10 * * 0,6')).toBe('Weekends 10:00');
+    expect(describeCron('15 6 * * *')).toBe('Daily 06:15');
+    expect(describeCron('0 8 1 * *')).toBe('Monthly on the 1st, 08:00');
+    expect(describeCron('0 8 22 * *')).toBe('Monthly on the 22nd, 08:00');
+  });
+
+  it('treats 0 and 7 as the same Sunday', () => {
+    expect(describeCron('0 12 * * 0')).toBe('Every SUN 12:00');
+    expect(describeCron('0 12 * * 7')).toBe('Every SUN 12:00');
+  });
+
+  it('returns the expression untouched when it cannot read it honestly', () => {
+    // Half a translation is worse than none: each of these means something the
+    // sentence form would misstate.
+    expect(describeCron('*/15 * * * *')).toBe('*/15 * * * *');
+    expect(describeCron('0 9-17 * * 1')).toBe('0 9-17 * * 1');
+    expect(describeCron('0 9 * 3 *')).toBe('0 9 * 3 *');
+    // Constraining both day fields means "either" in cron, not "both".
+    expect(describeCron('0 9 1 * 1')).toBe('0 9 1 * 1');
+    expect(describeCron('nonsense')).toBe('nonsense');
+    expect(describeCron('0 9 * *')).toBe('0 9 * *');
+  });
+});
+
+describe('saved views', () => {
+  const rows = [
+    task({ id: 'a', status: 'in_progress', due_date: '2026-09-04' }),
+    task({ id: 'b', status: 'todo', due_date: TODAY }),
+    task({ id: 'c', status: 'done', due_date: '2026-08-01' }),
+    task({ id: 'd', status: 'todo', due_date: null }),
+  ];
+
+  it('counts each view the way its filter would fetch it', () => {
+    expect(countsOf(rows, TODAY)).toEqual({
+      all: 4,
+      active: 1,
+      today: 1,
+      overdue: 1,
+      done: 1,
+    });
+  });
+
+  it('never counts finished work as due or overdue', () => {
+    // The done task is a month past its date, and belongs in neither.
+    const counts = countsOf([task({ status: 'done', due_date: '2026-08-01' })], TODAY);
+    expect(counts.overdue).toBe(0);
+    expect(counts.today).toBe(0);
+  });
+
+  it('draws the overdue boundary where the due chip does', () => {
+    // `due_to` is yesterday, so a task due today is never fetched as overdue.
+    expect(dayBefore(TODAY)).toBe('2026-09-04');
+    expect(viewOf('overdue').filters(TODAY).due_to).toBe('2026-09-04');
+  });
+
+  it('falls back to All for an unknown view name', () => {
+    expect(viewOf('nope').id).toBe('all');
+    expect(viewOf(null).id).toBe('all');
   });
 });

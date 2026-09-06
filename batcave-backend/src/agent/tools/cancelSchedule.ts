@@ -15,7 +15,7 @@ export const cancelScheduleTool = (schedules: ScheduleService, tasks: TaskServic
     {
       name: CANCEL_SCHEDULE,
       description:
-        'Stop a task\'s reminder or recurring schedule. `id` must come from a search_tasks or create_task result in this conversation. Fails if the task has no active schedule. Past notifications stay in the user\'s list.',
+        'Stop the reminder or recurring schedule on a task, so it stops notifying the user. The task itself is untouched and notifications it already sent stay in the user\'s list. A task with no active schedule comes back as an ordinary `ok: false` — say so rather than retrying. To move a schedule rather than remove it, call schedule_reminder or schedule_recurring again; they replace in place, so cancelling first is unnecessary.',
       schema: cancelScheduleToolSchema,
     },
   );

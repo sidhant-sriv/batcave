@@ -19,10 +19,18 @@ import { fullTimestamp, relativeTime, shortId } from '@/lib/time';
 
 interface Props {
   chat: ChatRow | null;
+  /**
+   * Off when something else draws the rule.
+   *
+   * In the console pane the header shares its row with the pane's own buttons,
+   * so the underline has to belong to that row — drawn here it would stop short
+   * on both sides and read as a stray line rather than an edge.
+   */
+  bordered?: boolean;
   className?: string;
 }
 
-export function ChatHeader({ chat, className }: Props) {
+export function ChatHeader({ chat, bordered = true, className }: Props) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
 
@@ -39,8 +47,8 @@ export function ChatHeader({ chat, className }: Props) {
     return (
       <header
         className={cn(
-          'flex h-[var(--shell-header-h)] shrink-0 items-center',
-          'border-b border-divider px-[var(--space-4)]',
+          'flex h-[var(--shell-header-h)] shrink-0 items-center px-[var(--space-4)]',
+          bordered && 'border-b border-divider',
           className,
         )}
       >
@@ -53,7 +61,8 @@ export function ChatHeader({ chat, className }: Props) {
     <header
       className={cn(
         'flex h-[var(--shell-header-h)] shrink-0 items-center gap-[var(--space-4)]',
-        'border-b border-divider px-[var(--space-4)]',
+        'px-[var(--space-4)]',
+        bordered && 'border-b border-divider',
         className,
       )}
     >

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ERRORS } from '../errors';
 import { SCHEDULE_STATUSES } from '../types/schedule';
-import { taskIdSchema } from './task';
+import { TASK_ID_FROM_RESULT, taskIdSchema } from './task';
 
 export const SCHED_LIST_LIMIT_MAX = 100;
 export const SCHED_LIST_LIMIT_DEFAULT = 50;
@@ -25,7 +25,12 @@ const remindAt = z
     (value) => DATE_TIME_PREFIX.test(value) && !Number.isNaN(Date.parse(value)),
     ERRORS.SCHEDULE_REMIND_AT_FORMAT,
   )
-  .transform((value) => new Date(value).toISOString());
+  .transform((value) => new Date(value).toISOString())
+  .describe(
+    'The absolute instant to notify at, ISO 8601 in UTC — "2026-09-11T09:00:00Z". ' +
+      'Resolve "Friday morning" or "in two hours" against the current time given to ' +
+      'you. It must be in the future, and a date alone is not enough.',
+  );
 
 /**
  * Only the shape is checked here. Whether the fields parse, ever fire, or fire
@@ -36,7 +41,12 @@ const cron = z
   .string()
   .trim()
   .max(100)
-  .refine((value) => value.split(/\s+/).length === 5, ERRORS.SCHEDULE_CRON_INVALID);
+  .refine((value) => value.split(/\s+/).length === 5, ERRORS.SCHEDULE_CRON_INVALID)
+  .describe(
+    'A five-field cron expression evaluated in UTC: "0 9 * * 1" is every Monday at ' +
+      '09:00, "0 18 * * *" every day at 18:00, "0 9 1 * *" the first of each month. ' +
+      'It must not fire more often than every 15 minutes.',
+  );
 
 /** What `ScheduleService.scheduleOnce` and `.scheduleRecurring` accept. */
 export const scheduleOnceSchema = z.object({ remind_at: remindAt });
@@ -49,9 +59,14 @@ export type ScheduleRecurringInput = z.input<typeof scheduleRecurringSchema>;
  * Flat tool args, `id` being the task's, so the same middleware that checks
  * `update_task` has seen the id can check these.
  */
-export const scheduleReminderToolSchema = z.object({ id: taskIdSchema, remind_at: remindAt });
-export const scheduleRecurringToolSchema = z.object({ id: taskIdSchema, cron });
-export const cancelScheduleToolSchema = z.object({ id: taskIdSchema });
+const scheduledTaskId = taskIdSchema.describe(TASK_ID_FROM_RESULT);
+
+export const scheduleReminderToolSchema = z.object({
+  id: scheduledTaskId,
+  remind_at: remindAt,
+});
+export const scheduleRecurringToolSchema = z.object({ id: scheduledTaskId, cron });
+export const cancelScheduleToolSchema = z.object({ id: scheduledTaskId });
 
 const limit = z.coerce
   .number()

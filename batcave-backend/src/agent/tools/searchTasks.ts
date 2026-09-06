@@ -1,7 +1,7 @@
 import { tool } from 'langchain';
 import { searchTasksToolSchema } from '../../schemas/task';
 import type { TaskService } from '../../services/taskService';
-import type { Task } from '../../types/task';
+import type { Task, TaskWithSchedule } from '../../types/task';
 import { envelope } from './envelope';
 import { SEARCH_TASKS } from './names';
 
@@ -22,17 +22,28 @@ export const compactTask = (task: Task) => ({
   description: task.description?.slice(0, DESCRIPTION_PREVIEW) ?? null,
 });
 
+/**
+ * A search result: the compact task plus its active schedule, or null when
+ * nothing notifies about it. The schedule travels with the task because the
+ * model cannot otherwise answer "which of these are scheduled" — there is no
+ * tool that lists schedules, and a due date is not one.
+ */
+const searchResult = (task: TaskWithSchedule) => ({
+  ...compactTask(task),
+  schedule: task.schedule,
+});
+
 export const searchTasksTool = (service: TaskService) =>
   tool(
     async (input) =>
       envelope(async () => {
         const { tasks, truncated } = await service.search(input);
-        return { count: tasks.length, truncated, tasks: tasks.map(compactTask) };
+        return { count: tasks.length, truncated, tasks: tasks.map(searchResult) };
       }),
     {
       name: SEARCH_TASKS,
       description:
-        'Find tasks. Every filter is optional and they narrow the result together. Pass one or two distinctive keywords as `query`, not a whole sentence. Use due_from/due_to as inclusive YYYY-MM-DD bounds; both exclude tasks with no due date. Call this before updating anything, to get the task id.',
+        'Find the user\'s tasks. Every filter is optional and they narrow the result together, so start broad: passing no filter at all lists recent tasks. Returns `{ count, truncated, tasks }`, and each task carries the id that update_task and the scheduling tools need — this is the only way to obtain one, so call it before changing or scheduling anything. Each task also carries `schedule`: null when nothing notifies about it, otherwise `{ kind, cron, next_at }` for the reminder ("once") or recurring cron it has — so this tool, with `scheduled: true`, is how you answer what the user is being reminded about, and how you check what a new schedule would replace. `truncated` means more tasks matched than were returned; narrow the filters rather than paging. An empty result is a real answer: retry once with fewer or broader keywords, then tell the user nothing matched.',
       schema: searchTasksToolSchema,
     },
   );

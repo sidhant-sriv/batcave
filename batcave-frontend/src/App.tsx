@@ -1,232 +1,222 @@
-import { useEffect, useState } from 'react';
-import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarClock, ListChecks, Moon, PanelRightClose, Sun, Terminal } from 'lucide-react';
-import type { ChatRow, Task } from '@/api/types';
-import { ChatHeader } from '@/components/agent/ChatHeader';
-import { Console } from '@/components/agent/Console';
-import { IconButton } from '@/components/primitives/Button';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Navigate, Route, Routes, useSearchParams } from 'react-router';
+import { useQuery } from '@tanstack/react-query';
+import { MessageSquare } from 'lucide-react';
+import { getChat } from '@/api/chats';
+import { ConsolePane } from '@/components/agent/ConsolePane';
+import { Navigator } from '@/components/nav/Navigator';
 import { OfflineBanner } from '@/components/state/States';
-import { TaskDetailModal } from '@/components/task/TaskDetailModal';
-import { SCHED_LIMIT_MAX, listNotifications } from '@/api/schedules';
-import { AgentRoute } from '@/routes/AgentRoute';
+import { AboutRoute } from '@/routes/AboutRoute';
 import { SchedRoute } from '@/routes/SchedRoute';
 import { TaskIndex } from '@/routes/TaskIndex';
 import { cn } from '@/lib/cn';
-import { useTheme } from '@/lib/prefs';
+import { useLayout } from '@/lib/layout';
+import { useConsoleOpen } from '@/lib/prefs';
+import { ShellContext, type Shell } from '@/lib/shell';
 
 /**
- * The shell: a 56px nav rail, the active surface, and an optional agent dock.
+ * The shell: a navigator, the active surface, and the console beside it.
  *
- * THE DOCK is the reason the layout is shaped this way. Cross-surface mutation
- * — the agent rewriting a task the user is looking at — is only legible if both
- * things are on screen at once. So the console can be pinned beside the index
- * (⌘J), where a row visibly flashes as the turn that changed it resolves.
+ * THE CONSOLE IS NOT A DESTINATION. Tasks are the product; the console is how
+ * you operate on them, so it sits alongside the record rather than behind a tab
+ * of its own. Cross-surface mutation — the agent rewriting a task you are
+ * looking at — is only legible when both are on screen, and that is the whole
+ * reason the layout is shaped this way.
  *
- * The dock deliberately shows one conversation and hides the conversation list;
- * the full /agent route is where conversations are managed.
+ * A SCHEDULE IS A FACET OF A TASK, not a third thing. It belongs to exactly one
+ * task, so it appears as a saved view, a column on the row, and a section in
+ * the task's own detail — never as its own top-level noun.
+ *
+ * The conversation lives in `?chat=`, not in the path: it is a companion to
+ * whatever surface is open, and putting it in the path would fight with the
+ * route the user is actually on. It stays in the URL rather than in component
+ * state so a conversation is still linkable and survives a reload.
  */
 
 export function App() {
-  const location = useLocation();
-  const [theme, setTheme] = useTheme();
-  const [dockOpen, setDockOpen] = useState(false);
+  const layout = useLayout();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [dockOpen, setDockOpen] = useConsoleOpen();
+  const [navSheet, setNavSheet] = useState(false);
+  const [overlayConsole, setOverlayConsole] = useState(false);
 
-  // The dock only makes sense over the deterministic surface. On /agent the
-  // console is already the whole page.
-  const dockAvailable = location.pathname.startsWith('/tasks');
+  const narrow = layout === 'narrow';
+  const chatId = searchParams.get('chat');
+
+  const selectChat = useCallback(
+    (id: string | null) => {
+      setSearchParams(
+        (params) => {
+          const next = new URLSearchParams(params);
+          if (id) next.set('chat', id);
+          else next.delete('chat');
+          return next;
+        },
+        { replace: true },
+      );
+
+      // On a phone the console is somewhere else entirely, so choosing a
+      // conversation has to take you there or the choice appears to do nothing.
+      if (narrow) setOverlayConsole(true);
+    },
+    [narrow, setSearchParams],
+  );
+
+  const openConsole = useCallback(() => {
+    if (narrow) setOverlayConsole(true);
+    else setDockOpen(true);
+  }, [narrow, setDockOpen]);
+
+  const consoleVisible = narrow ? overlayConsole : dockOpen;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'j') {
         event.preventDefault();
-        setDockOpen((open) => !open);
+        if (narrow) setOverlayConsole((open) => !open);
+        else setDockOpen(!dockOpen);
+      }
+
+      // Escape dismisses the overlays, innermost first. Only ever the ones this
+      // component owns: a modal or a menu stops the event before it gets here.
+      if (event.key === 'Escape') {
+        if (navSheet) setNavSheet(false);
+        else if (narrow && overlayConsole) setOverlayConsole(false);
       }
     };
 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [dockOpen, narrow, navSheet, overlayConsole, setDockOpen]);
+
+  // Coming back to a wide window should not leave a sheet stranded on top of a
+  // layout that has room for the real thing.
+  useEffect(() => {
+    if (!narrow) {
+      setNavSheet(false);
+      setOverlayConsole(false);
+    }
+  }, [narrow]);
+
+  const shell = useMemo<Shell>(
+    () => ({ layout, openNav: () => setNavSheet(true), openConsole }),
+    [layout, openConsole],
+  );
 
   return (
-    <div className="flex h-full flex-col">
-      <OfflineBanner />
+    <ShellContext value={shell}>
+      <div className="flex h-full flex-col">
+        <OfflineBanner />
 
-      <div className="flex min-h-0 flex-1">
-        <nav
-          className={cn(
-            'flex w-[var(--shell-rail-w)] shrink-0 flex-col items-center',
-            'border-r border-divider bg-app py-[var(--space-3)]',
-          )}
-        >
-          <div className="flex flex-1 flex-col items-center gap-[var(--space-1)]">
-            <RailLink to="/tasks" label="Tasks" icon={<ListChecks size={20} strokeWidth={1.5} />} />
-            <RailLink to="/agent" label="Agent" icon={<Terminal size={20} strokeWidth={1.5} />} />
-            <SchedRailLink />
-          </div>
-
-          <div className="flex flex-col items-center gap-[var(--space-2)]">
-            <IconButton
-              title={theme === 'night' ? 'Switch to day' : 'Switch to night'}
-              onClick={() => setTheme(theme === 'night' ? 'day' : 'night')}
-            >
-              {theme === 'night' ? (
-                <Sun size={16} strokeWidth={1.5} />
-              ) : (
-                <Moon size={16} strokeWidth={1.5} />
-              )}
-            </IconButton>
-
-            {/*
-             * Structural slot for the account menu. There is no auth, so there
-             * is nothing to put here — but the rail's bottom-aligned geometry is
-             * decided now rather than discovered later.
-             */}
-            <div
-              aria-hidden
-              className="size-[26px] rounded-full border border-dashed border-hairline"
+        <div className="relative flex min-h-0 flex-1">
+          {narrow ? null : (
+            <Navigator
+              variant={layout === 'wide' ? 'expanded' : 'rail'}
+              activeChatId={chatId}
+              onSelectChat={selectChat}
+              onOpenConsole={openConsole}
             />
-          </div>
-        </nav>
+          )}
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <Routes>
-            <Route path="/" element={<Navigate to="/tasks" replace />} />
-            <Route path="/tasks" element={<TaskIndex />} />
-            <Route path="/agent" element={<AgentRoute />} />
-            <Route path="/agent/:chatId" element={<AgentRoute />} />
-            <Route path="/sched" element={<SchedRoute />} />
-            <Route path="*" element={<Navigate to="/tasks" replace />} />
-          </Routes>
-        </main>
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <Routes>
+              <Route path="/" element={<Navigate to="/tasks" replace />} />
+              <Route path="/tasks" element={<TaskIndex />} />
+              <Route path="/sched" element={<SchedRoute />} />
+              <Route path="/about" element={<AboutRoute />} />
+              {/* The console used to be a route. Anything still pointing at it
+                  lands on the tasks it was always talking about. */}
+              <Route path="/agent/*" element={<Navigate to="/tasks" replace />} />
+              <Route path="*" element={<Navigate to="/tasks" replace />} />
+            </Routes>
+          </main>
 
-        {dockAvailable && dockOpen ? <AgentDock onClose={() => setDockOpen(false)} /> : null}
+          {consoleVisible ? (
+            <ConsolePane
+              chatId={chatId}
+              overlay={narrow}
+              onSelectChat={selectChat}
+              onClose={() => (narrow ? setOverlayConsole(false) : setDockOpen(false))}
+            />
+          ) : null}
+
+          {narrow && !overlayConsole ? <ConsoleBar chatId={chatId} onOpen={openConsole} /> : null}
+
+          {navSheet ? <NavSheet chatId={chatId} onSelectChat={selectChat} onClose={() => setNavSheet(false)} /> : null}
+        </div>
       </div>
-    </div>
+    </ShellContext>
   );
 }
 
 /**
- * The scheduled surface, with a count of what is waiting to be dismissed.
+ * The console, reduced to one line at the bottom of a phone.
  *
- * Shares the `['notifications']` query with the route itself, so the badge and
- * the page are never two versions of the truth and opening the page costs no
- * extra request. The badge is a number and not a dot: "3 things fired" and "one
- * thing fired" are different situations, and the rail is where that is decided.
+ * It names the conversation it would open, because the alternative — an anonymous
+ * "ask the agent" bar — hides the fact that there is a thread with history
+ * behind it, and someone would send a message into a conversation they did not
+ * know they were in.
  */
-function SchedRailLink() {
-  const notifications = useQuery({
-    queryKey: ['notifications'],
-    queryFn: () => listNotifications({ limit: SCHED_LIMIT_MAX }),
-    refetchInterval: 60_000,
-    refetchOnWindowFocus: true,
+function ConsoleBar({ chatId, onOpen }: { chatId: string | null; onOpen: () => void }) {
+  const chat = useQuery({
+    queryKey: ['chat', chatId],
+    queryFn: () => getChat(chatId!),
+    enabled: Boolean(chatId),
   });
 
-  const dueNow = (notifications.data?.notifications ?? []).filter(
-    (row) => row.acknowledged_at === null && row.outcome === 'notified',
-  ).length;
+  const title = chat.data?.chat.title;
 
   return (
-    <RailLink
-      to="/sched"
-      label="Sched"
-      icon={<CalendarClock size={20} strokeWidth={1.5} />}
-      badge={dueNow}
-    />
+    <button
+      type="button"
+      onClick={onOpen}
+      className={cn(
+        'absolute inset-x-0 bottom-0 z-dock flex items-center gap-[var(--space-3)]',
+        'min-h-[56px] border-t border-divider bg-well px-[var(--space-3)] text-left',
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate font-prose text-body-sm text-disabled">
+        Ask the agent…
+      </span>
+      <span className="flex max-w-[45%] shrink-0 items-center gap-[6px] font-mono text-micro uppercase text-muted">
+        <MessageSquare size={14} strokeWidth={1.5} />
+        <span className="truncate">{chatId ? (title ?? 'Untitled') : 'New'}</span>
+      </span>
+    </button>
   );
 }
 
-function RailLink({
-  to,
-  label,
-  icon,
-  badge = 0,
+function NavSheet({
+  chatId,
+  onSelectChat,
+  onClose,
 }: {
-  to: string;
-  label: string;
-  icon: React.ReactNode;
-  badge?: number;
+  chatId: string | null;
+  onSelectChat: (id: string | null) => void;
+  onClose: () => void;
 }) {
   return (
-    <NavLink
-      to={to}
-      className={({ isActive }) =>
-        cn(
-          'relative flex w-full flex-col items-center gap-[2px] py-[var(--space-2)]',
-          'transition-colors duration-[90ms] ease-sharp',
-          isActive ? 'text-primary' : 'text-muted hover:text-secondary',
-        )
-      }
-    >
-      {({ isActive }) => (
-        <>
-          <span
-            aria-hidden
-            className={cn(
-              'absolute inset-y-[2px] left-0 w-[var(--bw-rail)]',
-              isActive ? 'bg-accent' : 'bg-transparent',
-            )}
-          />
-          <span className="relative">
-            {icon}
-            {badge > 0 ? (
-              <span
-                aria-hidden
-                className={cn(
-                  'absolute -right-[6px] -top-[4px] min-w-[14px] rounded-full px-[3px]',
-                  'bg-accent text-center font-mono text-[9px] leading-[14px] text-app',
-                )}
-              >
-                {badge > 9 ? '9+' : badge}
-              </span>
-            ) : null}
-          </span>
-          <span className="font-mono text-micro uppercase">{label}</span>
-          {badge > 0 ? <span className="sr-only">{badge} waiting</span> : null}
-        </>
-      )}
-    </NavLink>
-  );
-}
-
-/**
- * The console, docked beside the index.
- *
- * Holds its own chat id in component state rather than in the URL: the dock is
- * a companion to whatever surface is open, and putting its conversation in the
- * address bar would fight with the route the user is actually on.
- */
-function AgentDock({ onClose }: { onClose: () => void }) {
-  const queryClient = useQueryClient();
-  const [chat, setChat] = useState<ChatRow | null>(null);
-  const [openTask, setOpenTask] = useState<Task | null>(null);
-
-  return (
-    <aside
-      className={cn(
-        'flex w-[var(--dock-w)] min-w-[var(--dock-w-min)] max-w-[var(--dock-w-max)]',
-        'shrink-0 flex-col border-l border-[var(--dock-border)] bg-[var(--dock-bg)]',
-        'motion-safe:animate-reveal',
-      )}
-    >
-      <div className="flex items-center">
-        <ChatHeader chat={chat} className="min-w-0 flex-1" />
-        <IconButton title="Close dock (⌘J)" onClick={onClose} className="mr-[var(--space-2)]">
-          <PanelRightClose size={16} strokeWidth={1.5} />
-        </IconButton>
+    <div className="absolute inset-0 z-modal flex">
+      <div
+        className="w-full max-w-[320px] motion-safe:animate-reveal"
+        role="dialog"
+        aria-label="Views and conversations"
+      >
+        <Navigator
+          variant="sheet"
+          activeChatId={chatId}
+          onSelectChat={onSelectChat}
+          onClose={onClose}
+          onNavigate={onClose}
+        />
       </div>
 
-      <Console
-        chatId={chat?.id ?? null}
-        onChatCreated={(created) => {
-          setChat(created);
-          void queryClient.invalidateQueries({ queryKey: ['chats'] });
-        }}
-        onChatUpdated={setChat}
-        onOpenTask={(task) => setOpenTask(task as Task)}
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="min-w-0 flex-1 bg-scrim"
       />
-
-      <TaskDetailModal task={openTask} onOpenChange={(open) => !open && setOpenTask(null)} />
-    </aside>
+    </div>
   );
 }

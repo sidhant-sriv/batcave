@@ -7,6 +7,7 @@ import { Button } from '@/components/primitives/Button';
 import { SelectField, TextAreaField, TextField } from '@/components/primitives/Field';
 import { Modal } from '@/components/primitives/Modal';
 import { ErrorBanner } from '@/components/state/States';
+import { TaskSchedule } from '@/components/sched/TaskSchedule';
 import { cn } from '@/lib/cn';
 import { acknowledge } from '@/lib/mutationLog';
 import { fullTimestamp, relativeTime, shortId } from '@/lib/time';
@@ -219,6 +220,12 @@ export function TaskDetailModal({ task, onOpenChange }: Props) {
             onChange={(event) => setDraft({ ...draft, due_date: event.target.value })}
           />
         </div>
+
+        {/* A schedule is a facet of this task, not a separate record, so it is
+            read and cancelled here rather than on a surface of its own. It is
+            not part of the draft: cancelling is immediate and has nothing to do
+            with the Save button, because it is not an edit to the task. */}
+        <TaskSchedule taskId={task.id} />
       </div>
     </Modal>
   );

@@ -15,7 +15,7 @@ export const createTaskTool = (service: TaskService) =>
     {
       name: CREATE_TASK,
       description:
-        'Create a new task. Call this whenever the user asks for something to be added to their task list. Resolve relative dates such as "Friday" into an absolute YYYY-MM-DD date first.',
+        'Create a new task, for anything the user asks to be added to their list. Returns the task, including the id that update_task and the scheduling tools need — a task you just created can be updated or scheduled straight away, with no search first. A due date is only when the work is expected; it notifies nobody, so use schedule_reminder as well if the user asked to be reminded.',
       schema: createTaskSchema,
     },
   );

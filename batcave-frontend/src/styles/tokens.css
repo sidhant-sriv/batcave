@@ -424,6 +424,30 @@
   --shell-max-w: 1200px;
   --shell-header-h: 44px;
 
+  /* --- Navigator --------------------------------------------------------
+   * The left column: saved views, conversations, and the two things that are
+   * neither (About, theme). It has two widths and no third: 220px expanded,
+   * and the 56px icon rail it collapses to below 1280px — the same rail width
+   * the shell has always used, so the collapse moves nothing horizontally that
+   * was not already on that grid.
+   * -------------------------------------------------------------------- */
+  --nav-w: 220px;
+  --nav-item-h: 28px;
+  /* Touch targets in the sheet. Never below 44px, and 48 leaves a hairline of
+   * slack between adjacent rows on a phone. */
+  --nav-item-h-touch: 48px;
+  --nav-pad-x: var(--space-3);
+
+  /* --- Console pane ------------------------------------------------------
+   * Docked, not floating. Narrower on the medium breakpoint rather than
+   * dismissed, because a layout whose premise is "the console is beside the
+   * record" cannot drop the console first when space runs out.
+   * -------------------------------------------------------------------- */
+  --console-w: 400px;
+  --console-w-md: 360px;
+  --console-border: var(--border-divider);
+  --console-bg: var(--surface-app);
+
   /* --- Task row / card -------------------------------------------------
    * 36px is dense and stays legible because the metadata sits on the same
    * baseline row as the title rather than stacked beneath it.
@@ -442,6 +466,8 @@
    * surface has to be. Sized to the widest content each column can hold:
    * "ACTIVE" for status, "! 12D LATE" for due, "12 SEP" for updated. */
   --task-col-status: 86px;
+  /* "EVERY MON 09:00" is the widest thing a schedule cell holds. */
+  --task-col-sched: 132px;
   --task-col-due: 92px;
   --task-col-updated: 68px;
 

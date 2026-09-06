@@ -15,7 +15,7 @@ import {
   type SearchTasksInput,
   type UpdateTaskInput,
 } from '../schemas/task';
-import type { Task } from '../types/task';
+import type { Task, TaskWithSchedule } from '../types/task';
 
 /** Thrown when input fails validation inside the service. */
 export class TaskValidationError extends Error {
@@ -76,7 +76,10 @@ export class TaskService {
     return selectTaskById(this.db, id);
   }
 
-  async search(input: SearchTasksInput): Promise<{ tasks: Task[]; truncated: boolean }> {
+  /** Results carry the task's active schedule, so a caller can tell what notifies. */
+  async search(
+    input: SearchTasksInput,
+  ): Promise<{ tasks: TaskWithSchedule[]; truncated: boolean }> {
     const parsed = searchTasksSchema.safeParse(input);
     if (!parsed.success) {
       throw new TaskValidationError(ERRORS.INVALID_SEARCH_FILTERS, parsed.error.issues);

@@ -17,7 +17,7 @@ export const updateTaskTool = (service: TaskService) =>
     {
       name: UPDATE_TASK,
       description:
-        'Change an existing task. `id` must come from a search_tasks or create_task result in this conversation; ids cannot be guessed. Send only the fields that change, and send all of them in one call. Use null to clear description or due_date.',
+        'Change an existing task: rename it, re-prioritise it, move its due date, or mark it done. Send every field that changes in one call and omit the rest — omitting a field leaves it alone, and passing null to `description` or `due_date` clears it. Returns the updated task and a `changed` list of the fields that actually moved. This never touches the task\'s schedule; use cancel_schedule for that.',
       schema: updateTaskToolSchema,
     },
   );

@@ -9,6 +9,7 @@ import {
 } from '@/api/schedules';
 import type { NotificationWithTask, ScheduleWithTask, Task } from '@/api/types';
 import { EmptyState, ErrorBanner, LoadingRows } from '@/components/state/States';
+import { NavToggle } from '@/components/nav/NavToggle';
 import { NotificationSchedRow, ScheduleSchedRow } from '@/components/sched/SchedRow';
 import { TaskDetailModal } from '@/components/task/TaskDetailModal';
 import { cn } from '@/lib/cn';
@@ -77,10 +78,11 @@ export function SchedRoute() {
     <div className="flex min-h-0 flex-1 flex-col">
       <header
         className={cn(
-          'flex h-[var(--shell-header-h)] shrink-0 items-center gap-[var(--space-4)]',
+          'flex h-[var(--shell-header-h)] shrink-0 items-center gap-[var(--space-3)]',
           'border-b border-divider px-[var(--space-4)]',
         )}
       >
+        <NavToggle />
         <h1 className="font-mono text-micro uppercase text-muted">Scheduled</h1>
         {/* Everything on this page is UTC, and saying so once here is cheaper
             than the reader inferring it wrongly from a single chip. */}

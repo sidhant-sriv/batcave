@@ -2,12 +2,13 @@
  * Normalises Hono's `Record<string, string[]>` query bag into the shape
  * `searchTasksSchema` expects. Arrays are accepted both as repeated keys
  * (`?status=todo&status=in_progress`) and comma-separated
- * (`?status=todo,in_progress`). Pure, so it is testable without a request.
+ * (`?status=todo,in_progress`). Scalars stay strings — `scheduled=true` is
+ * coerced by the schema, not here. Pure, so it is testable without a request.
  */
 export function parseSearchQuery(queries: Record<string, string[]>): Record<string, unknown> {
   const filters: Record<string, unknown> = {};
 
-  for (const key of ['query', 'due_from', 'due_to', 'limit'] as const) {
+  for (const key of ['query', 'due_from', 'due_to', 'scheduled', 'limit'] as const) {
     const value = queries[key]?.[0];
     if (value !== undefined) filters[key] = value;
   }

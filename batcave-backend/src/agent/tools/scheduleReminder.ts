@@ -20,7 +20,7 @@ export const scheduleReminderTool = (schedules: ScheduleService, tasks: TaskServ
     {
       name: SCHEDULE_REMINDER,
       description:
-        'Remind the user about a task once, at an absolute time. `remind_at` is an ISO 8601 UTC instant such as 2026-09-11T09:00:00Z and must be in the future — resolve "Friday morning" or "in two hours" against the current time yourself. `id` must come from a search_tasks or create_task result in this conversation. A task has one schedule: this replaces any existing one. It notifies the user and never changes the task.',
+        'Notify the user about a task once, at an absolute time, for "remind me on Friday" or "in two hours". Reminding is not the same as a due date: this changes nothing about the task itself, it only puts a notification in the user\'s scheduled list. A task has at most one schedule, so this replaces whatever it had — the result reports the new schedule and, in `replaced`, the one it superseded, which is worth telling the user about. Use schedule_recurring instead if the reminder should repeat.',
       schema: scheduleReminderToolSchema,
     },
   );
