@@ -95,6 +95,46 @@ describe('the loop', () => {
     expect((await new TaskService(env.DB).getById(task.id))?.status).toBe('done');
   });
 
+  it('gives the model each task\'s schedule, and the filter to ask only for scheduled ones', async () => {
+    const reminded = await seed({ title: 'Renew the domain' });
+    await seed({ title: 'Buy milk' });
+    // Written straight to D1: the tool reads the row, and a real schedule would
+    // also start a workflow instance this test has no use for.
+    await env.DB.prepare(
+      `INSERT INTO schedules
+         (id, task_id, kind, cron, next_at, status, notification_count, created_at, ended_at)
+       VALUES (?, ?, 'recurring', '0 9 * * 1', '2026-09-07T09:00:00.000Z', 'active', 0, ?, NULL)`,
+    )
+      .bind(crypto.randomUUID(), reminded.id, '2026-09-06T00:00:00.000Z')
+      .run();
+
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { scheduled: true }, id: 'call_1' }] },
+      { text: 'You are reminded about "Renew the domain" every Monday at 09:00 UTC.' },
+    ]);
+
+    const { body } = await chat(app, 'What are my scheduled tasks?');
+    const [search] = body.actions;
+
+    expect(search).toMatchObject({ tool: 'search_tasks', ok: true });
+    expect(search!.tasks).toHaveLength(1);
+    expect(search!.tasks![0]).toMatchObject({
+      title: 'Renew the domain',
+      schedule: { kind: 'recurring', cron: '0 9 * * 1', next_at: '2026-09-07T09:00:00.000Z' },
+    });
+  });
+
+  it('reports an unscheduled task as schedule null rather than leaving it out', async () => {
+    await seed({ title: 'Buy milk' });
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: {}, id: 'call_1' }] },
+      { text: 'Nothing is scheduled.' },
+    ]);
+
+    const { body } = await chat(app, 'Anything scheduled?');
+    expect(body.actions[0]!.tasks![0]).toMatchObject({ title: 'Buy milk', schedule: null });
+  });
+
   it('remembers a search from the previous turn', async () => {
     const task = await seed({ title: 'Build the backend API' });
     const { app } = appWith([

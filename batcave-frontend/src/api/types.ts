@@ -27,6 +27,21 @@ export interface Task {
 }
 
 /**
+ * The active schedule on a task, as a task listing carries it: enough to say
+ * when it next fires and whether it repeats, without the workflow bookkeeping
+ * `/api/schedules` returns. `null` means the task notifies nobody.
+ */
+export interface TaskScheduleSummary {
+  kind: ScheduleKind;
+  /** Five-field cron in UTC; `null` for a one-shot reminder. */
+  cron: string | null;
+  next_at: string;
+}
+
+/** What a task search returns: the row plus whatever notifies about it. */
+export type TaskWithSchedule = Task & { schedule: TaskScheduleSummary | null };
+
+/**
  * What `search_tasks` puts into a chat response. The tool drops timestamps and
  * truncates the description to 120 chars to keep a page of results a few KB,
  * so this is a real subset of `Task` rather than the same thing.
@@ -41,6 +56,11 @@ export interface CompactTask {
   priority: TaskPriority;
   due_date: string | null;
   description: string | null;
+  /**
+   * `null` when nothing notifies about the task, and absent on turns replayed
+   * from before the tool carried it — history is stored as the tool wrote it.
+   */
+  schedule?: TaskScheduleSummary | null;
 }
 
 /** Everything a card can render from either shape. */
@@ -73,11 +93,13 @@ export interface TaskFilters {
   priority?: TaskPriority[];
   due_from?: string;
   due_to?: string;
+  /** `true` for only tasks with an active schedule, `false` for only those without. */
+  scheduled?: boolean;
   limit?: number;
 }
 
 export interface TaskListResponse {
-  tasks: Task[];
+  tasks: TaskWithSchedule[];
   /** More rows matched than `limit`. The only pagination signal that exists. */
   truncated: boolean;
 }

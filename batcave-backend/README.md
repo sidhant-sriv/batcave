@@ -143,6 +143,7 @@ accepted as repeated keys or comma-separated.
 | `priority` | `low`, `medium`, `high`                                   |
 | `due_from` | inclusive `YYYY-MM-DD`; excludes undated tasks            |
 | `due_to`   | inclusive `YYYY-MM-DD`; excludes undated tasks            |
+| `scheduled`| `true` for tasks with an active reminder or cron, `false` for those without; omit for both |
 | `limit`    | 1–100, default 20                                         |
 
 ```sh
@@ -152,6 +153,11 @@ curl 'http://localhost:8787/api/tasks?status=todo,in_progress&query=cloudflare'
 ```json
 { "tasks": [ { "...": "..." } ], "truncated": false }
 ```
+
+Each task carries its active schedule joined in — `"schedule": { "kind",
+"cron", "next_at" }`, or `null` when nothing notifies about it. A due date is
+when work is expected; a schedule is when the user hears about it, so
+`scheduled` and `due_from`/`due_to` answer different questions.
 
 `truncated` is true when more rows matched than `limit`. Results are ordered
 dated-first, then by due date, then priority, then age.
