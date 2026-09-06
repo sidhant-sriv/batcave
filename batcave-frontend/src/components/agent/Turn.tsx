@@ -4,6 +4,7 @@ import { disambiguationOf } from '@/lib/disambiguation';
 import { renderInlineMarkdown } from '@/lib/inlineMarkdown';
 import { ordinalLabel, ordinalPhrase } from '@/lib/ordinals';
 import { TaskRow } from '@/components/task/TaskRow';
+import { ScheduleResultBlock } from './ScheduleResultBlock';
 import { ToolChip, ToolError } from './ToolChip';
 import { ToolResultBlock } from './ToolResultBlock';
 
@@ -48,7 +49,10 @@ export function Turn({ turn, onOpenTask, onChoose }: Props) {
               </div>
               <ToolError action={action} />
               {!disambiguation ? (
-                <ToolResultBlock action={action} onOpenTask={onOpenTask} />
+                <>
+                  <ToolResultBlock action={action} onOpenTask={onOpenTask} />
+                  <ScheduleResultBlock action={action} onOpenTask={onOpenTask} />
+                </>
               ) : null}
             </div>
           ))}

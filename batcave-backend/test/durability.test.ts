@@ -285,3 +285,87 @@ describe('checkpoint pruning', () => {
     expect((await threadState(threadId)).next).toEqual([]);
   });
 });
+
+describe('a schedule whose clock could not be started', () => {
+  const remindAt = () => new Date(Date.now() + 3_600_000).toISOString();
+
+  /** A Workflow binding that cannot create instances, and admits none exist. */
+  const brokenWorkflow = () =>
+    ({
+      create: async () => {
+        throw new Error('WORKFLOW_UNAVAILABLE');
+      },
+      get: async () => {
+        throw new Error('instance not found');
+      },
+    }) as unknown as Env['TASK_SCHEDULE'];
+
+  it('fails the turn rather than reporting a reminder that will never fire', async () => {
+    const task = await new TaskService(env.DB).create({ title: 'Renew the domain' });
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { query: 'domain' }, id: 'call_1' }] },
+      {
+        toolCalls: [
+          { name: 'schedule_reminder', args: { id: task.id, remind_at: remindAt() }, id: 'call_2' },
+        ],
+      },
+      { text: 'I will remind you.' },
+    ]);
+    const { chatId, threadId } = await startChat();
+
+    const { status, body } = await chat(app, {
+      chatId,
+      message: 'Remind me about the domain in an hour',
+      key: 'no-clock',
+      bindings: { TASK_SCHEDULE: brokenWorkflow() },
+    });
+
+    // The escalate middleware takes it out of the graph: a schedule with no
+    // instance would look set and silently never fire, which is worse than an
+    // error the user can retry.
+    expect(status).toBe(503);
+    expect(body.error).toBe(ERRORS.AGENT_UNAVAILABLE);
+    expect((await runFor(threadId, 'x', 'no-clock'))?.status).toBe('failed');
+  });
+
+  it('is repaired by the retry, which finds its own row and starts the instance', async () => {
+    const task = await new TaskService(env.DB).create({ title: 'Renew the domain' });
+    const at = remindAt();
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { query: 'domain' }, id: 'call_1' }] },
+      {
+        toolCalls: [
+          { name: 'schedule_reminder', args: { id: task.id, remind_at: at }, id: 'call_2' },
+        ],
+      },
+      { text: 'I will remind you.' },
+    ]);
+    const { chatId } = await startChat();
+
+    await chat(app, {
+      chatId,
+      message: 'Remind me about the domain in an hour',
+      key: 'no-clock',
+      bindings: { TASK_SCHEDULE: brokenWorkflow() },
+    });
+
+    const retry = await chat(app, {
+      chatId,
+      message: 'Remind me about the domain in an hour',
+      key: 'no-clock',
+    });
+
+    expect(retry.status).toBe(200);
+    expect(retry.body.actions.at(-1)).toMatchObject({ tool: 'schedule_reminder', ok: true });
+
+    // The tool call id is unchanged, so the retry derives the same schedule id
+    // and resumes that row instead of writing a second one.
+    const { results } = await env.DB.prepare(
+      `SELECT id, next_at, status FROM schedules WHERE task_id = ?`,
+    )
+      .bind(task.id)
+      .all();
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ next_at: at, status: 'active' });
+  });
+});

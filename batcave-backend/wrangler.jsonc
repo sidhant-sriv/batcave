@@ -15,6 +15,13 @@
       "migrations_dir": "migrations"
     }
   ],
+  "workflows": [
+    {
+      "name": "batcave-task-schedule",
+      "binding": "TASK_SCHEDULE",
+      "class_name": "TaskScheduleWorkflow"
+    }
+  ],
   "vars": {
     "GROQ_MODEL": "qwen/qwen3.8-27b",
     // Origins the browser frontend may call /api/* from. Add the Pages

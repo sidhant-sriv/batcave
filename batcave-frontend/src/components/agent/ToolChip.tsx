@@ -24,6 +24,10 @@ const OUTCOME = {
 function resultOf(action: AgentAction): string {
   if (!action.ok) return 'FAILED';
 
+  if (action.schedule) {
+    return action.schedule.status === 'cancelled' ? 'CANCELLED' : 'SCHEDULED';
+  }
+
   if (action.tasks) {
     const count = action.tasks.length;
     return count === 1 ? '1 RESULT' : `${count} RESULTS`;

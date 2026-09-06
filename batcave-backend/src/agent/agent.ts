@@ -1,4 +1,5 @@
 import { createAgent, dynamicSystemPromptMiddleware } from 'langchain';
+import { ScheduleService } from '../services/scheduleService';
 import { TaskService } from '../services/taskService';
 import type { Env } from '../types/task';
 import { D1Saver } from './checkpointer';
@@ -6,7 +7,7 @@ import { escalate } from './middleware/escalate';
 import { sequentialToolCalls } from './middleware/sequentialToolCalls';
 import { taskIdGuard } from './middleware/taskIdGuard';
 import { makeModel } from './model';
-import { systemPrompt, todayUtc } from './prompt';
+import { systemPrompt } from './prompt';
 import { agentState } from './state';
 import { buildTools } from './tools';
 
@@ -24,23 +25,24 @@ export interface AgentOptions {
 }
 
 /**
- * Built per request. Tools close over a `TaskService` bound to this request's
- * D1 binding, and nothing is module-level state that could leak between
- * requests sharing an isolate.
+ * Built per request. Tools close over services bound to this request's own
+ * bindings, and nothing is module-level state that could leak between requests
+ * sharing an isolate.
  *
  * Middleware order is outermost first. `escalate` is last so it sits closest to
  * the tool and classifies what the tool itself raised.
  */
 export function buildAgent(env: Env, options: AgentOptions = {}) {
-  const service = new TaskService(env.DB);
+  const tasks = new TaskService(env.DB);
+  const schedules = new ScheduleService(env.DB, env.TASK_SCHEDULE);
 
   return createAgent({
     model: options.model ?? makeModel(env, options.fetch),
-    tools: buildTools(service),
+    tools: buildTools({ tasks, schedules }),
     stateSchema: agentState,
     checkpointer: new D1Saver(env.DB),
     middleware: [
-      dynamicSystemPromptMiddleware(() => systemPrompt(todayUtc())),
+      dynamicSystemPromptMiddleware(() => systemPrompt(new Date())),
       sequentialToolCalls,
       taskIdGuard,
       escalate,

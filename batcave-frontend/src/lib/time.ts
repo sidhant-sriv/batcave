@@ -47,6 +47,23 @@ export function shortDate(iso: string): string {
   return `${date.getUTCDate()} ${months[date.getUTCMonth()]}`;
 }
 
+/**
+ * `2026-09-12T09:00:00Z` → `12 SEP 09:00 UTC`.
+ *
+ * The zone is part of the label, not a footnote. Schedules are stored and
+ * evaluated in UTC, and a time shown without one would be read as local — which
+ * is exactly the misreading that makes someone miss a notification.
+ */
+export function formatInstant(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+
+  const hours = String(date.getUTCHours()).padStart(2, '0');
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+
+  return `${shortDate(iso)} ${hours}:${minutes} UTC`;
+}
+
 /** Full timestamp, for a `title` attribute where the terse form is ambiguous. */
 export function fullTimestamp(iso: string): string {
   const date = new Date(iso);

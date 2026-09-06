@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarClock, ListChecks, Moon, PanelRightClose, Sun, Terminal } from 'lucide-react';
 import type { ChatRow, Task } from '@/api/types';
 import { ChatHeader } from '@/components/agent/ChatHeader';
@@ -8,7 +8,9 @@ import { Console } from '@/components/agent/Console';
 import { IconButton } from '@/components/primitives/Button';
 import { OfflineBanner } from '@/components/state/States';
 import { TaskDetailModal } from '@/components/task/TaskDetailModal';
+import { SCHED_LIMIT_MAX, listNotifications } from '@/api/schedules';
 import { AgentRoute } from '@/routes/AgentRoute';
+import { SchedRoute } from '@/routes/SchedRoute';
 import { TaskIndex } from '@/routes/TaskIndex';
 import { cn } from '@/lib/cn';
 import { useTheme } from '@/lib/prefs';
@@ -60,24 +62,7 @@ export function App() {
           <div className="flex flex-1 flex-col items-center gap-[var(--space-1)]">
             <RailLink to="/tasks" label="Tasks" icon={<ListChecks size={20} strokeWidth={1.5} />} />
             <RailLink to="/agent" label="Agent" icon={<Terminal size={20} strokeWidth={1.5} />} />
-
-            {/*
-             * Reserved for Workflows — durable scheduled automations. Disabled
-             * rather than hidden so the navigation's eventual shape is visible
-             * now and the surface does not have to be re-laid-out later. It has
-             * no handler and no route: the slot is the whole feature today.
-             */}
-            <div
-              aria-disabled
-              title="Scheduled automations — not yet available"
-              className={cn(
-                'flex w-full cursor-not-allowed flex-col items-center gap-[2px]',
-                'py-[var(--space-2)] text-disabled opacity-50',
-              )}
-            >
-              <CalendarClock size={20} strokeWidth={1.5} />
-              <span className="font-mono text-micro uppercase">Sched</span>
-            </div>
+            <SchedRailLink />
           </div>
 
           <div className="flex flex-col items-center gap-[var(--space-2)]">
@@ -110,6 +95,7 @@ export function App() {
             <Route path="/tasks" element={<TaskIndex />} />
             <Route path="/agent" element={<AgentRoute />} />
             <Route path="/agent/:chatId" element={<AgentRoute />} />
+            <Route path="/sched" element={<SchedRoute />} />
             <Route path="*" element={<Navigate to="/tasks" replace />} />
           </Routes>
         </main>
@@ -120,7 +106,47 @@ export function App() {
   );
 }
 
-function RailLink({ to, label, icon }: { to: string; label: string; icon: React.ReactNode }) {
+/**
+ * The scheduled surface, with a count of what is waiting to be dismissed.
+ *
+ * Shares the `['notifications']` query with the route itself, so the badge and
+ * the page are never two versions of the truth and opening the page costs no
+ * extra request. The badge is a number and not a dot: "3 things fired" and "one
+ * thing fired" are different situations, and the rail is where that is decided.
+ */
+function SchedRailLink() {
+  const notifications = useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => listNotifications({ limit: SCHED_LIMIT_MAX }),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
+
+  const dueNow = (notifications.data?.notifications ?? []).filter(
+    (row) => row.acknowledged_at === null && row.outcome === 'notified',
+  ).length;
+
+  return (
+    <RailLink
+      to="/sched"
+      label="Sched"
+      icon={<CalendarClock size={20} strokeWidth={1.5} />}
+      badge={dueNow}
+    />
+  );
+}
+
+function RailLink({
+  to,
+  label,
+  icon,
+  badge = 0,
+}: {
+  to: string;
+  label: string;
+  icon: React.ReactNode;
+  badge?: number;
+}) {
   return (
     <NavLink
       to={to}
@@ -141,8 +167,22 @@ function RailLink({ to, label, icon }: { to: string; label: string; icon: React.
               isActive ? 'bg-accent' : 'bg-transparent',
             )}
           />
-          {icon}
+          <span className="relative">
+            {icon}
+            {badge > 0 ? (
+              <span
+                aria-hidden
+                className={cn(
+                  'absolute -right-[6px] -top-[4px] min-w-[14px] rounded-full px-[3px]',
+                  'bg-accent text-center font-mono text-[9px] leading-[14px] text-app',
+                )}
+              >
+                {badge > 9 ? '9+' : badge}
+              </span>
+            ) : null}
+          </span>
           <span className="font-mono text-micro uppercase">{label}</span>
+          {badge > 0 ? <span className="sr-only">{badge} waiting</span> : null}
         </>
       )}
     </NavLink>

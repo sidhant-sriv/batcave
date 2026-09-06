@@ -212,3 +212,190 @@ describe('tool arguments', () => {
     expect((await new TaskService(env.DB).search({})).tasks).toHaveLength(1);
   });
 });
+
+describe('scheduling', () => {
+  /** A schedule the agent set, read back from D1 rather than from the reply. */
+  const scheduleFor = (taskId: string) =>
+    env.DB.prepare(`SELECT * FROM schedules WHERE task_id = ? AND status = 'active'`)
+      .bind(taskId)
+      .first<Record<string, unknown>>();
+
+  it('finds a task, then schedules a reminder on it', async () => {
+    const task = await seed({ title: 'Finish Cloudflare assignment' });
+    const remindAt = new Date(Date.now() + 3_600_000).toISOString();
+
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { query: 'Cloudflare' }, id: 'call_1' }] },
+      {
+        toolCalls: [
+          { name: 'schedule_reminder', args: { id: task.id, remind_at: remindAt }, id: 'call_2' },
+        ],
+      },
+      { text: 'I will remind you about "Finish Cloudflare assignment" in an hour.' },
+    ]);
+
+    const { status, body } = await chat(app, 'Remind me about the Cloudflare assignment in an hour');
+
+    expect(status).toBe(200);
+    expect(body.actions.map((action) => action.tool)).toEqual([
+      'search_tasks',
+      'schedule_reminder',
+    ]);
+
+    // The task travels inside the schedule, never beside it: a top-level `task`
+    // would tell the client the agent rewrote the record, which it did not.
+    const action = body.actions[1]!;
+    expect(action.ok).toBe(true);
+    expect(action.task).toBeUndefined();
+    expect(action.schedule).toMatchObject({
+      kind: 'once',
+      next_at: remindAt,
+      status: 'active',
+      task: { id: task.id, title: 'Finish Cloudflare assignment' },
+    });
+
+    expect(await scheduleFor(task.id)).toMatchObject({ kind: 'once', next_at: remindAt });
+  });
+
+  it('schedules a recurring notification from a cron', async () => {
+    const task = await seed({ title: 'Water the plants' });
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { query: 'plants' }, id: 'call_1' }] },
+      {
+        toolCalls: [
+          { name: 'schedule_recurring', args: { id: task.id, cron: '0 9 * * 1' }, id: 'call_2' },
+        ],
+      },
+      { text: 'Every Monday at 09:00 UTC.' },
+    ]);
+
+    const { body } = await chat(app, 'Remind me to water the plants every Monday at 9');
+
+    expect(body.actions[1]).toMatchObject({ tool: 'schedule_recurring', ok: true });
+    expect(await scheduleFor(task.id)).toMatchObject({
+      kind: 'recurring',
+      cron: '0 9 * * 1',
+    });
+  });
+
+  it('hands a bad cron back to the model, which corrects it', async () => {
+    const task = await seed({ title: 'Water the plants' });
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { query: 'plants' }, id: 'call_1' }] },
+      {
+        toolCalls: [
+          { name: 'schedule_recurring', args: { id: task.id, cron: '* * * * *' }, id: 'call_2' },
+        ],
+      },
+      {
+        toolCalls: [
+          { name: 'schedule_recurring', args: { id: task.id, cron: '0 9 * * 1' }, id: 'call_3' },
+        ],
+      },
+      { text: 'Set for Mondays at 09:00 UTC.' },
+    ]);
+
+    const { status, body } = await chat(app, 'Water the plants every minute');
+
+    // A frequency the service refuses is the model's to fix, so the turn
+    // continues rather than failing.
+    expect(status).toBe(200);
+    expect(body.actions.map((action) => [action.tool, action.ok])).toEqual([
+      ['search_tasks', true],
+      ['schedule_recurring', false],
+      ['schedule_recurring', true],
+    ]);
+    expect(body.actions[1]!.error).toBe(ERRORS.SCHEDULE_CRON_TOO_FREQUENT);
+    expect(await scheduleFor(task.id)).toMatchObject({ cron: '0 9 * * 1' });
+  });
+
+  it('reports the schedule a new one replaced', async () => {
+    const task = await seed({ title: 'Water the plants' });
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { query: 'plants' }, id: 'call_1' }] },
+      {
+        toolCalls: [
+          { name: 'schedule_recurring', args: { id: task.id, cron: '0 9 * * 1' }, id: 'call_2' },
+        ],
+      },
+      { text: 'Mondays it is.' },
+      {
+        toolCalls: [
+          { name: 'schedule_recurring', args: { id: task.id, cron: '0 9 * * 5' }, id: 'call_3' },
+        ],
+      },
+      { text: 'Moved it to Fridays.' },
+    ]);
+
+    const first = await chat(app, 'Water the plants every Monday');
+    const second = await chat(app, 'Make that Fridays', first.body.chat.id);
+
+    expect(second.body.actions[0]!.schedule).toMatchObject({ cron: '0 9 * * 5' });
+    expect((second.body.actions[0] as { replaced?: unknown }).replaced).toBeUndefined();
+
+    // One active schedule survives the replacement.
+    const { results } = await env.DB.prepare(
+      `SELECT cron FROM schedules WHERE status = 'active'`,
+    ).all();
+    expect(results).toEqual([{ cron: '0 9 * * 5' }]);
+  });
+
+  it('cancels a schedule', async () => {
+    const task = await seed({ title: 'Water the plants' });
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { query: 'plants' }, id: 'call_1' }] },
+      {
+        toolCalls: [
+          { name: 'schedule_recurring', args: { id: task.id, cron: '0 9 * * 1' }, id: 'call_2' },
+        ],
+      },
+      { text: 'Done.' },
+      { toolCalls: [{ name: 'cancel_schedule', args: { id: task.id }, id: 'call_3' }] },
+      { text: 'Stopped it.' },
+    ]);
+
+    const first = await chat(app, 'Water the plants every Monday');
+    const second = await chat(app, 'Actually, cancel that', first.body.chat.id);
+
+    expect(second.body.actions[0]).toMatchObject({ tool: 'cancel_schedule', ok: true });
+    expect(await scheduleFor(task.id)).toBeNull();
+  });
+
+  it('tells the model when there is nothing to cancel', async () => {
+    const task = await seed({ title: 'Water the plants' });
+    const { app } = appWith([
+      { toolCalls: [{ name: 'search_tasks', args: { query: 'plants' }, id: 'call_1' }] },
+      { toolCalls: [{ name: 'cancel_schedule', args: { id: task.id }, id: 'call_2' }] },
+      { text: 'That task has no reminder set.' },
+    ]);
+
+    const { body } = await chat(app, 'Cancel the plants reminder');
+    expect(body.actions[1]).toMatchObject({ ok: false, error: ERRORS.SCHEDULE_NOT_FOUND });
+  });
+
+  it('refuses to schedule against an id it has not seen', async () => {
+    const task = await seed({ title: 'Water the plants' });
+    const { app } = appWith([
+      {
+        toolCalls: [
+          {
+            name: 'schedule_reminder',
+            args: { id: task.id, remind_at: new Date(Date.now() + 3_600_000).toISOString() },
+            id: 'call_1',
+          },
+        ],
+      },
+      { text: 'Let me find that task first.' },
+    ]);
+
+    const { body } = await chat(app, 'Remind me about the plants tomorrow');
+
+    // Scheduling against the wrong row is the same mistake as writing to it.
+    expect(body.actions[0]).toMatchObject({
+      tool: 'schedule_reminder',
+      ok: false,
+      error: ERRORS.AGENT_TASK_ID_NOT_SEEN,
+    });
+    expect(await scheduleFor(task.id)).toBeNull();
+  });
+});

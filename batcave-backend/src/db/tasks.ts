@@ -83,6 +83,21 @@ export async function updateTask(
   return row ?? null;
 }
 
+/**
+ * Puts a finished task back on the list. Only a recurring schedule calls this,
+ * when its firing finds the task already done: the schedule is the statement
+ * that the work comes round again, so the row goes back to `todo` rather than a
+ * second task being created beside it.
+ *
+ * Guarded on `status = 'done'` so a firing on an open task writes nothing at
+ * all, which is what keeps `updated_at` honest.
+ */
+export function reopenTaskStatement(db: D1Database, id: string, updatedAt: string) {
+  return db
+    .prepare(`UPDATE tasks SET status = 'todo', updated_at = ? WHERE id = ? AND status = 'done'`)
+    .bind(updatedAt, id);
+}
+
 /** Split free text into the terms that must each match. */
 export function searchTerms(query: string | null | undefined): string[] {
   if (!query) return [];

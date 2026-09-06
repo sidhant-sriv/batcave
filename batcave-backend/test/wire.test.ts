@@ -61,7 +61,10 @@ describe('what reaches Groq', () => {
     expect(request!.parallel_tool_calls).toBe(false);
     expect(request!.model).toBe(env.GROQ_MODEL ?? DEFAULT_MODEL);
     expect(request!.tools?.map((tool) => tool.function.name).sort()).toEqual([
+      'cancel_schedule',
       'create_task',
+      'schedule_recurring',
+      'schedule_reminder',
       'search_tasks',
       'update_task',
     ]);

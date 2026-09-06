@@ -4,8 +4,15 @@ import { findInfrastructureError } from './agent/middleware/escalate';
 import { classifyModelError } from './agent/modelErrors';
 import { ERRORS } from './errors';
 import { chatsRoute } from './routes/chat';
+import { notificationsRoute } from './routes/notifications';
+import { schedulesRoute } from './routes/schedules';
 import { tasksRoute } from './routes/tasks';
 import { ChatBusyError, ChatNotFoundError, ChatValidationError } from './services/chatService';
+import {
+  NotificationNotFoundError,
+  ScheduleNotFoundError,
+  ScheduleValidationError,
+} from './services/scheduleService';
 import { TaskNotFoundError, TaskValidationError } from './services/taskService';
 import type { Env } from './types/task';
 
@@ -37,6 +44,8 @@ app.get('/health', (c) => c.json({ status: 'ok' }));
 
 app.route('/api/tasks', tasksRoute);
 app.route('/api/chats', chatsRoute);
+app.route('/api/schedules', schedulesRoute);
+app.route('/api/notifications', notificationsRoute);
 
 app.notFound((c) => c.json({ error: ERRORS.NOT_FOUND }, 404));
 
@@ -62,6 +71,12 @@ export const onError: ErrorHandler<{ Bindings: Env }> = (error, c) => {
   if (error instanceof ChatBusyError) {
     return c.json({ error: error.message }, 409);
   }
+  if (error instanceof ScheduleValidationError) {
+    return c.json({ error: error.message, issues: error.issues }, 400);
+  }
+  if (error instanceof ScheduleNotFoundError || error instanceof NotificationNotFoundError) {
+    return c.json({ error: error.message }, 404);
+  }
 
   const infrastructure = findInfrastructureError(error);
   if (infrastructure) {
@@ -80,5 +95,11 @@ export const onError: ErrorHandler<{ Bindings: Env }> = (error, c) => {
 };
 
 app.onError(onError);
+
+/**
+ * The Workflow class has to be exported from the Worker's main module for the
+ * runtime to find it; the `class_name` in wrangler.jsonc names this export.
+ */
+export { TaskScheduleWorkflow } from './workflows/taskSchedule';
 
 export default app;

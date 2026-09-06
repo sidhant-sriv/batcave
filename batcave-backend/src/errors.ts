@@ -35,6 +35,23 @@ export const ERRORS = {
   CHAT_TITLE_REQUIRED: 'title is required',
   INVALID_CHAT_UPDATE: 'Invalid chat update',
   INVALID_CHAT_LIST: 'Invalid chat list options',
+
+  INVALID_SCHEDULE_INPUT: 'Invalid schedule input',
+  INVALID_SCHEDULE_LIST: 'Invalid schedule list options',
+  INVALID_NOTIFICATION_LIST: 'Invalid notification list options',
+  SCHEDULE_NOT_FOUND: 'No active schedule for that task',
+  NOTIFICATION_NOT_FOUND: 'Notification not found',
+  SCHEDULE_ID_INVALID: 'schedule id must be a UUID',
+  NOTIFICATION_ID_INVALID: 'notification id must be a UUID',
+  SCHEDULE_REMIND_AT_FORMAT: 'remind_at must be an ISO 8601 date-time such as 2026-09-11T09:00:00Z',
+  SCHEDULE_IN_PAST: 'remind_at must be in the future',
+  SCHEDULE_TOO_FAR: 'remind_at must be within a year',
+  SCHEDULE_TASK_DONE: 'Cannot set a reminder on a finished task',
+  SCHEDULE_CRON_INVALID: 'cron must be a valid 5-field expression, e.g. "0 9 * * 1"',
+  SCHEDULE_CRON_NO_RUN: 'cron never fires',
+  SCHEDULE_CRON_TOO_FREQUENT: 'cron must not fire more often than every 15 minutes',
+  SCHEDULE_INSERT_NO_ROW: 'Insert did not return the created schedule',
+  NOTIFICATION_INSERT_NO_ROW: 'Insert did not return the notification',
 } as const;
 
 /** Messages that need runtime detail interpolated into them. */

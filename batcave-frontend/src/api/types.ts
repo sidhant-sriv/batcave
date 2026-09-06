@@ -98,7 +98,14 @@ export interface ChatRow {
   last_message_at: string;
 }
 
-export const TOOL_NAMES = ['create_task', 'search_tasks', 'update_task'] as const;
+export const TOOL_NAMES = [
+  'create_task',
+  'search_tasks',
+  'update_task',
+  'schedule_reminder',
+  'schedule_recurring',
+  'cancel_schedule',
+] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
 /**
@@ -107,6 +114,9 @@ export type ToolName = (typeof TOOL_NAMES)[number];
  * Note what is *not* here: the arguments the model passed, and any timing. The
  * backend's `actionsOf` keeps only the result envelope, so a tool chip can
  * report which tool ran and how it went, but not what it was asked.
+ *
+ * `schedule` is the exception that proves the rule: the result echoes the time
+ * it was set for, so that one detail can be shown honestly.
  */
 export interface AgentAction {
   tool: ToolName | string;
@@ -115,6 +125,8 @@ export interface AgentAction {
   task?: Task;
   /** search_tasks returns the compact shape. */
   tasks?: CompactTask[];
+  /** The scheduling tools. The task is nested in it, not beside it. */
+  schedule?: ScheduleAction;
   error?: unknown;
 }
 
@@ -154,6 +166,82 @@ export interface ChatListResponse {
 
 export interface ChatResponse {
   chat: ChatRow;
+}
+
+/* --- Schedules — batcave-backend/src/types/schedule.ts ------------------- */
+
+export const SCHEDULE_KINDS = ['once', 'recurring'] as const;
+export const SCHEDULE_STATUSES = ['active', 'ended', 'cancelled'] as const;
+export const NOTIFICATION_OUTCOMES = ['notified', 'skipped'] as const;
+
+export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
+export type ScheduleStatus = (typeof SCHEDULE_STATUSES)[number];
+export type NotificationOutcome = (typeof NOTIFICATION_OUTCOMES)[number];
+
+/**
+ * When a task's notifications happen. A due date is when work is expected; a
+ * schedule is when the user hears about it, and setting one never sets the
+ * other. A task has at most one active schedule.
+ */
+export interface Schedule {
+  id: string;
+  task_id: string;
+  kind: ScheduleKind;
+  /** Five-field cron in UTC; `null` for a one-shot reminder. */
+  cron: string | null;
+  /** The next firing, as an ISO instant. */
+  next_at: string;
+  status: ScheduleStatus;
+  notification_count: number;
+  created_at: string;
+  ended_at: string | null;
+}
+
+/**
+ * One firing of a schedule. Written by the Workflow, never by a request, which
+ * is why the client learns about it by polling rather than from a response.
+ */
+export interface Notification {
+  id: string;
+  schedule_id: string;
+  task_id: string;
+  seq: number;
+  notified_at: string;
+  /** `skipped` is a reminder that woke to find its task already done. */
+  outcome: NotificationOutcome;
+  /** 1 when this firing put a done task back to todo. SQLite has no boolean. */
+  reopened: 0 | 1;
+  /** Set when the user dismisses it, never by the passage of time. */
+  acknowledged_at: string | null;
+}
+
+/** What the list endpoints return: the row with its task joined in. */
+export type ScheduleWithTask = Schedule & { task: Task };
+export type NotificationWithTask = Notification & { task: Task };
+
+/**
+ * What a scheduling tool puts into a chat response. The task is the compact
+ * shape here, and it is nested rather than top-level on purpose: scheduling
+ * does not change the task, so it must not be logged as a mutation.
+ */
+export type ScheduleAction = Schedule & { task: CompactTask };
+
+export interface ScheduleListResponse {
+  schedules: ScheduleWithTask[];
+  truncated: boolean;
+}
+
+export interface NotificationListResponse {
+  notifications: NotificationWithTask[];
+  truncated: boolean;
+}
+
+export interface ScheduleResponse {
+  schedule: Schedule;
+}
+
+export interface NotificationResponse {
+  notification: Notification;
 }
 
 /* --- Errors — batcave-backend/src/errors.ts ------------------------------ */

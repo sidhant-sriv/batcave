@@ -4,7 +4,7 @@ import type { ChatTurn, Task } from '@/api/types';
 import { disambiguationOf } from './disambiguation';
 import { dueBucket, dueLabel, formatDate } from './dueDate';
 import { ordinalLabel, ordinalPhrase } from './ordinals';
-import { relativeTime } from './time';
+import { formatInstant, relativeTime } from './time';
 
 /**
  * The logic that decides what the interface says, tested without React or the
@@ -104,6 +104,44 @@ describe('disambiguationOf', () => {
     ).toBeNull();
   });
 
+  it('counts scheduling as having acted', () => {
+    // The agent that set a reminder already picked a task, so "want a second
+    // one?" is a follow-up rather than a choice it is blocked on.
+    expect(
+      disambiguationOf(
+        turn({
+          reply: 'Reminder set for Friday. Anything else?',
+          actions: [
+            search(2),
+            {
+              tool: 'schedule_reminder',
+              ok: true,
+              schedule: {
+                id: 's1',
+                task_id: 't0',
+                kind: 'once',
+                cron: null,
+                next_at: '2026-09-11T09:00:00.000Z',
+                status: 'active',
+                notification_count: 0,
+                created_at: '2026-09-05T12:00:00.000Z',
+                ended_at: null,
+                task: {
+                  id: 't0',
+                  title: 'Task 0',
+                  status: 'todo',
+                  priority: 'medium',
+                  due_date: null,
+                  description: null,
+                },
+              },
+            },
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
+
   it('does not fire without a question, or on a single candidate', () => {
     expect(disambiguationOf(turn({ reply: 'Here they are.', actions: [search(2)] }))).toBeNull();
     expect(disambiguationOf(turn({ reply: 'Which one?', actions: [search(1)] }))).toBeNull();
@@ -137,6 +175,21 @@ describe('changedFields', () => {
   it('does not resend a field that was already empty', () => {
     const original = task({ due_date: null, description: null });
     expect(changedFields(original, { due_date: '', description: '' })).toBeNull();
+  });
+});
+
+describe('formatInstant', () => {
+  it('names the zone, because a bare time would be read as local', () => {
+    expect(formatInstant('2026-09-12T09:00:00.000Z')).toBe('12 SEP 09:00 UTC');
+    expect(formatInstant('2026-09-12T18:05:00.000Z')).toBe('12 SEP 18:05 UTC');
+  });
+
+  it('converts an offset to UTC rather than showing what it was given', () => {
+    expect(formatInstant('2026-09-12T18:30:00+05:30')).toBe('12 SEP 13:00 UTC');
+  });
+
+  it('renders an unparseable value as the same dash an absent one uses', () => {
+    expect(formatInstant('not a date')).toBe('—');
   });
 });
 

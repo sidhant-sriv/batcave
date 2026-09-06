@@ -10,6 +10,8 @@ export interface AgentAction {
   ok: boolean;
   task?: unknown;
   tasks?: unknown[];
+  /** What a scheduling tool produced, with the task it belongs to nested in it. */
+  schedule?: unknown;
   error?: unknown;
 }
 
@@ -54,6 +56,7 @@ export function actionsOf(messages: BaseMessage[]): AgentAction[] {
     const action: AgentAction = { tool, ok: payload.ok === true };
     if (payload.task !== undefined) action.task = payload.task;
     if (Array.isArray(payload.tasks)) action.tasks = payload.tasks;
+    if (payload.schedule !== undefined) action.schedule = payload.schedule;
     if (payload.error !== undefined) action.error = payload.error;
     actions.push(action);
   }

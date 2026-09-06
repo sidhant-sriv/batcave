@@ -24,7 +24,18 @@ export interface Disambiguation {
 }
 
 const SEARCH = 'search_tasks';
-const MUTATIONS = new Set(['create_task', 'update_task']);
+/**
+ * Anything that wrote. Scheduling counts: the agent that set a reminder has
+ * already picked a task, so a question after it is a follow-up rather than a
+ * blocked choice.
+ */
+const MUTATIONS = new Set([
+  'create_task',
+  'update_task',
+  'schedule_reminder',
+  'schedule_recurring',
+  'cancel_schedule',
+]);
 
 export function disambiguationOf(turn: ChatTurn): Disambiguation | null {
   const { reply, actions } = turn;

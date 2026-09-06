@@ -467,6 +467,16 @@
   --due-chip-pad-x: 6px;
   --due-chip-radius: var(--radius-1);
 
+  /* --- Scheduled surface ------------------------------------------------ */
+  /* Three fixed columns to the right of the task row, for the same reason the
+   * index has fixed columns: sized to their widest content — a cron expression,
+   * "12 SEP 09:00 UTC" with the repeat glyph, and one small button. The action
+   * column keeps its width on rows that have no action, so the chips above and
+   * below stay in one line. */
+  --sched-col-meta: 96px;
+  --sched-col-chip: 148px;
+  --sched-col-action: 76px;
+
   /* --- Chat / agent console -------------------------------------------- */
   --msg-gap: var(--space-5);
   --msg-max-w: 68ch;
