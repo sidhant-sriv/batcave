@@ -22,6 +22,14 @@
       "class_name": "TaskScheduleWorkflow"
     }
   ],
+  // Speech-to-text for the composer's microphone. Nothing else uses it.
+  // `remote` is not a choice: Workers AI has no local emulation, so even
+  // `wrangler dev` bills the real account. Stating it silences a warning on
+  // every run and keeps that fact where someone will read it.
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
   "vars": {
     "GROQ_MODEL": "qwen/qwen3.8-27b",
     // Origins the browser frontend may call /api/* from. Add the Pages

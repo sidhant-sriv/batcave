@@ -52,6 +52,11 @@ export const ERRORS = {
   SCHEDULE_CRON_TOO_FREQUENT: 'cron must not fire more often than every 15 minutes',
   SCHEDULE_INSERT_NO_ROW: 'Insert did not return the created schedule',
   NOTIFICATION_INSERT_NO_ROW: 'Insert did not return the notification',
+
+  AUDIO_REQUIRED: 'No audio was sent',
+  AUDIO_TOO_LARGE: 'Audio must be under 8 MB',
+  TRANSCRIBE_EMPTY: 'Nothing was said',
+  TRANSCRIBE_FAILED: 'Could not transcribe the audio',
 } as const;
 
 /** Messages that need runtime detail interpolated into them. */

@@ -41,6 +41,8 @@ export interface Env {
   DB: D1Database;
   /** The Workflow that sleeps for a schedule and writes its notifications. */
   TASK_SCHEDULE: Workflow<ScheduleParams>;
+  /** Workers AI, used only to transcribe dictated messages. */
+  AI: Ai;
   GROQ_API_KEY: string;
   GROQ_MODEL?: string;
   /** Comma-separated origins the browser frontend may call `/api/*` from. */

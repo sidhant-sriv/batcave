@@ -7,6 +7,7 @@ import { chatsRoute } from './routes/chat';
 import { notificationsRoute } from './routes/notifications';
 import { schedulesRoute } from './routes/schedules';
 import { tasksRoute } from './routes/tasks';
+import { transcribeRoute } from './routes/transcribe';
 import { ChatBusyError, ChatNotFoundError, ChatValidationError } from './services/chatService';
 import {
   NotificationNotFoundError,
@@ -46,6 +47,7 @@ app.route('/api/tasks', tasksRoute);
 app.route('/api/chats', chatsRoute);
 app.route('/api/schedules', schedulesRoute);
 app.route('/api/notifications', notificationsRoute);
+app.route('/api/transcribe', transcribeRoute);
 
 app.notFound((c) => c.json({ error: ERRORS.NOT_FOUND }, 404));
 

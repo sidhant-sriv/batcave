@@ -5,8 +5,10 @@ import { describeCron } from './cron';
 import { disambiguationOf } from './disambiguation';
 import { dueBucket, dueLabel, formatDate } from './dueDate';
 import { ordinalLabel, ordinalPhrase } from './ordinals';
+import { clampConsoleWidth } from './prefs';
 import { formatInstant, relativeTime } from './time';
 import { countsOf, dayBefore, viewOf } from './views';
+import { formatElapsed, pickMimeType } from './voice';
 
 /**
  * The logic that decides what the interface says, tested without React or the
@@ -270,5 +272,66 @@ describe('saved views', () => {
   it('falls back to All for an unknown view name', () => {
     expect(viewOf('nope').id).toBe('all');
     expect(viewOf(null).id).toBe('all');
+  });
+});
+
+describe('pickMimeType', () => {
+  const supports = (...types: string[]) => (type: string) => types.includes(type);
+
+  it('prefers opus in webm when the browser offers a choice', () => {
+    expect(pickMimeType(supports('audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'))).toBe(
+      'audio/webm;codecs=opus',
+    );
+  });
+
+  it('falls back to plain webm before mp4', () => {
+    expect(pickMimeType(supports('audio/webm', 'audio/mp4'))).toBe('audio/webm');
+  });
+
+  it('accepts mp4, which is all Safari records', () => {
+    expect(pickMimeType(supports('audio/mp4'))).toBe('audio/mp4');
+  });
+
+  // The button is hidden rather than offered and then failing.
+  it('returns null when the browser records none of them', () => {
+    expect(pickMimeType(() => false)).toBeNull();
+  });
+});
+
+describe('formatElapsed', () => {
+  it('counts whole seconds from zero', () => {
+    expect(formatElapsed(0)).toBe('0:00');
+    expect(formatElapsed(999)).toBe('0:00');
+    expect(formatElapsed(4_200)).toBe('0:04');
+  });
+
+  it('rolls over into minutes with a padded seconds field', () => {
+    expect(formatElapsed(60_000)).toBe('1:00');
+    expect(formatElapsed(65_000)).toBe('1:05');
+  });
+
+  // The timer is driven by wall-clock subtraction, which can go backwards.
+  it('never renders a negative time', () => {
+    expect(formatElapsed(-500)).toBe('0:00');
+  });
+});
+
+describe('clampConsoleWidth', () => {
+  it('holds the console between its own bounds', () => {
+    expect(clampConsoleWidth(500, 1600)).toBe(500);
+    expect(clampConsoleWidth(120, 1600)).toBe(320);
+    expect(clampConsoleWidth(2000, 1600)).toBe(720);
+    expect(clampConsoleWidth(500.4, 1600)).toBe(500);
+  });
+
+  it('leaves the surface a table to be, in a window that has the room', () => {
+    // 1024 - 480 = 544, so the console gives up its own maximum first.
+    expect(clampConsoleWidth(720, 1024)).toBe(544);
+  });
+
+  it('keeps the console usable in a window too small for both', () => {
+    // Below ~800 the two floors collide, and the console's is the one that
+    // wins: a pane narrower than its composer is broken, a tight surface isn't.
+    expect(clampConsoleWidth(400, 700)).toBe(320);
   });
 });

@@ -80,8 +80,17 @@ interface RequestOptions {
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, idempotencyKey, signal } = options;
 
+  // A Blob is a recording on its way to /api/transcribe. It already carries its
+  // own content type and has to arrive as bytes, so it is the one body that is
+  // passed through rather than serialised.
+  const isBlob = body instanceof Blob;
+
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (body !== undefined) {
+    headers['Content-Type'] = isBlob
+      ? body.type || 'application/octet-stream'
+      : 'application/json';
+  }
   if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
 
   let response: Response;
@@ -89,7 +98,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     response = await fetch(`${BASE_URL}${path}`, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isBlob ? body : JSON.stringify(body),
       signal,
     });
   } catch (error) {

@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CornerDownLeft } from 'lucide-react';
 import { CHAT_MESSAGE_MAX } from '@/api/chats';
 import { cn } from '@/lib/cn';
+import { formatElapsed, useRecorder, type Recorder } from '@/lib/voice';
+import { MicButton } from './MicButton';
 
 /**
  * The message box.
@@ -10,6 +12,11 @@ import { cn } from '@/lib/cn';
  * one turn per conversation at a time and answers a second with a 409, so a
  * composer that accepted input during execution would be promising something
  * the server will refuse. Better to make the constraint visible.
+ *
+ * Dictation fills this box; it never sends. The agent mutates — it creates
+ * tasks, reopens them, cancels schedules — and a transcript is a guess. Landing
+ * the words somewhere the user reads them before pressing Enter is what keeps a
+ * mis-heard syllable from reaching a tool.
  */
 
 interface Props {
@@ -23,6 +30,9 @@ interface Props {
 export function Composer({ onSend, disabled = false, status, autoFocus }: Props) {
   const [value, setValue] = useState('');
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  /** Where to leave the caret once a dictated insert has been applied. */
+  const caret = useRef<number | null>(null);
 
   // Grow with the content, up to a ceiling. Beyond that it scrolls, so the
   // transcript above never gets squeezed out by a long message.
@@ -39,6 +49,43 @@ export function Composer({ onSend, disabled = false, status, autoFocus }: Props)
     if (!disabled && autoFocus) ref.current?.focus();
   }, [disabled, autoFocus]);
 
+  /**
+   * Speech lands at the cursor rather than replacing the box. Someone who typed
+   * half a sentence and then reached for the microphone meant to add to it, and
+   * eating their typing would be the one unforgivable bug in this feature.
+   */
+  const insert = useCallback((text: string) => {
+    const el = ref.current;
+    const from = el?.selectionStart ?? null;
+    const to = el?.selectionEnd ?? null;
+
+    setValue((current) => {
+      const head = current.slice(0, from ?? current.length);
+      const tail = current.slice(to ?? current.length);
+      // Speech arrives with no leading space, so one is supplied where the join
+      // would otherwise weld two words together.
+      const gap = head && !/\s$/.test(head) ? ' ' : '';
+
+      caret.current = (head + gap + text).length;
+      return `${head}${gap}${text}${tail}`.slice(0, CHAT_MESSAGE_MAX);
+    });
+  }, []);
+
+  const recorder = useRecorder(insert);
+
+  // Runs after the dictated value has been committed, which is the only moment
+  // the caret can be placed at the end of what was just said.
+  useEffect(() => {
+    if (caret.current === null) return;
+
+    const el = ref.current;
+    const at = Math.min(caret.current, value.length);
+    caret.current = null;
+
+    el?.focus();
+    el?.setSelectionRange(at, at);
+  }, [value]);
+
   const send = () => {
     const message = value.trim();
     if (!message || disabled) return;
@@ -47,6 +94,7 @@ export function Composer({ onSend, disabled = false, status, autoFocus }: Props)
   };
 
   const remaining = CHAT_MESSAGE_MAX - value.length;
+  const hint = hintOf(recorder);
 
   return (
     <div
@@ -88,6 +136,10 @@ export function Composer({ onSend, disabled = false, status, autoFocus }: Props)
           )}
         />
 
+        {/* Absent rather than disabled where the browser cannot record: a
+            button that could never work is worse than no button. */}
+        {recorder.supported ? <MicButton recorder={recorder} disabled={disabled} /> : null}
+
         <button
           type="button"
           onClick={send}
@@ -106,9 +158,34 @@ export function Composer({ onSend, disabled = false, status, autoFocus }: Props)
       </div>
 
       <div className="flex items-center justify-between font-mono text-micro uppercase text-disabled">
-        <span>Enter to send · Shift+Enter for a new line</span>
+        <span className={hint.tone} role={recorder.state === 'idle' ? undefined : 'status'}>
+          {hint.text}
+        </span>
         {remaining < 200 ? <span>{remaining} left</span> : null}
       </div>
     </div>
   );
+}
+
+/**
+ * Row two doubles as the recorder's status line. That is why voice needed no
+ * new layout here: the composer already had somewhere honest to say what it was
+ * doing, and a microphone is mostly a thing that needs saying.
+ */
+function hintOf(recorder: Recorder): { text: string; tone: string } {
+  switch (recorder.state) {
+    case 'starting':
+      return { text: 'Opening the microphone…', tone: 'text-muted' };
+    case 'recording':
+      return {
+        text: `● Listening ${formatElapsed(recorder.elapsedMs)} · Release to transcribe`,
+        tone: 'text-agent-executing',
+      };
+    case 'transcribing':
+      return { text: 'Transcribing…', tone: 'text-muted' };
+    default:
+      return recorder.error
+        ? { text: recorder.error, tone: 'text-agent-error' }
+        : { text: 'Enter to send · Shift+Enter for a new line', tone: 'text-disabled' };
+  }
 }

@@ -121,3 +121,66 @@ export function useConsoleOpen(): [boolean, (open: boolean) => void] {
   const update = useCallback((next: boolean) => setConsoleOpen(next), []);
   return [open, update];
 }
+
+/* --- Console width ------------------------------------------------------- */
+
+/**
+ * How wide the docked console is, in pixels.
+ *
+ * A number rather than a t-shirt size, because the split between the record and
+ * the agent is the one proportion in this layout nobody else can pick for you:
+ * it depends on the table you keep open and the window you keep it in. `null`
+ * means never dragged, which is what lets the breakpoint defaults still apply
+ * instead of freezing one width into storage on first load.
+ *
+ * The bounds are the layout's, not a taste. Below CONSOLE_W_MIN the composer
+ * and the tool chips start wrapping; past CONSOLE_W_MAX the console is reading
+ * as the surface rather than beside it; and SURFACE_W_MIN keeps a table's worth
+ * of room for the thing the console exists to sit next to. `--surface-w-min` in
+ * tokens.css mirrors that last number so CSS can hold the same line when the
+ * window shrinks under a console that was already dragged wide.
+ */
+
+const CONSOLE_W_KEY = 'batcave.console.w';
+
+export const CONSOLE_W_MIN = 320;
+export const CONSOLE_W_MAX = 720;
+const SURFACE_W_MIN = 480;
+
+/** Per breakpoint, and the same numbers as `--console-w` / `--console-w-md`. */
+export const CONSOLE_W_DEFAULT = 400;
+export const CONSOLE_W_DEFAULT_MD = 360;
+
+export function clampConsoleWidth(width: number, viewport: number): number {
+  // In a window too small to honour both bounds the minimum wins: a console
+  // narrower than its own composer is broken, a crowded surface is only tight.
+  const max = Math.max(CONSOLE_W_MIN, Math.min(CONSOLE_W_MAX, viewport - SURFACE_W_MIN));
+  return Math.round(Math.min(max, Math.max(CONSOLE_W_MIN, width)));
+}
+
+export function getConsoleWidth(): number | null {
+  try {
+    const stored = Number(localStorage.getItem(CONSOLE_W_KEY));
+    // A missing key reads as 0, and 0 is not a width anyone dragged to.
+    return Number.isFinite(stored) && stored > 0 ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `null` forgets the drag, which is how the pane goes back to its default. */
+export function setConsoleWidth(width: number | null): void {
+  try {
+    if (width === null) localStorage.removeItem(CONSOLE_W_KEY);
+    else localStorage.setItem(CONSOLE_W_KEY, String(Math.round(width)));
+  } catch {
+    // A private-mode quota error must not take the interaction down with it.
+  }
+  emit();
+}
+
+export function useConsoleWidth(): [number | null, (width: number | null) => void] {
+  const width = useSyncExternalStore(subscribe, getConsoleWidth, () => null);
+  const update = useCallback((next: number | null) => setConsoleWidth(next), []);
+  return [width, update];
+}

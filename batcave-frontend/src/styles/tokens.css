@@ -448,6 +448,15 @@
   --console-border: var(--border-divider);
   --console-bg: var(--surface-app);
 
+  /* Both widths are defaults, not the shape: the left edge is a drag handle,
+   * and a dragged width is remembered. This is the floor the surface keeps
+   * whatever the console is dragged to, mirrored by SURFACE_W_MIN in prefs.ts.
+   * prefs.ts enforces it during the drag; this one holds the same line later,
+   * when the window shrinks under a console that was already dragged wide. */
+  --surface-w-min: 480px;
+  /* Wider than the hairline it sits on, because a 1px grab target is a dare. */
+  --console-resize-w: 7px;
+
   /* --- Task row / card -------------------------------------------------
    * 36px is dense and stays legible because the metadata sits on the same
    * baseline row as the title rather than stacked beneath it.
