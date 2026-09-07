@@ -80,14 +80,31 @@ const SOURCE: Array<[string, React.ReactNode]> = [
   ['MCP endpoint', 'https://batcave-backend.sidhant-sriv.workers.dev/mcp'],
   // Committed alongside the code rather than linked out, so the prompts and the
   // commits they produced can be read against each other.
-  ['Prompt history', 'In the repository — every prompt this was built with, in order'],
+  [
+    'Prompt history',
+    <Link
+      key="prompts"
+      href={`${REPO}/blob/main/PROMPT_HISTORY.txt`}
+      label="PROMPT_HISTORY.txt — every prompt this was built with, in order"
+    />,
+  ],
 ];
 
 const AUTHOR: Array<[string, React.ReactNode]> = [
   ['Name', 'Sidhant Srivastava'],
-  ['Currently', '[ROLE, COMPANY]'],
-  ['Background', '[ONE OR TWO LINES FROM YOUR RESUME]'],
-  ['Links', '[RESUME / LINKEDIN / EMAIL]'],
+  ['Currently', 'Software Engineer at Writesonic (YC S21)'],
+  [
+    'Background',
+    'Agent infrastructure in production — multi-agent orchestration on LangGraph and Temporal, MCP servers, and eval suites that run as CI checks. Before that, backend and developer tooling in TypeScript and Go.',
+  ],
+  [
+    'Links',
+    <span key="links" className="flex flex-wrap gap-x-[var(--space-3)] gap-y-[var(--space-1)]">
+      <Link href="https://github.com/sidhant-sriv" label="github" />
+      <Link href="https://linkedin.com/in/sidhant-srivastava-41803620b" label="linkedin" />
+      <Link href="mailto:sidhant.sriv@gmail.com" label="sidhant.sriv@gmail.com" />
+    </span>,
+  ],
 ];
 
 /** Prose stays at a readable measure; only the diagrams use the full column. */
