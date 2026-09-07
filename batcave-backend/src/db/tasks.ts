@@ -1,10 +1,16 @@
+import type { Actor } from '../actor';
 import type { Task, TaskScheduleSummary, TaskWithSchedule } from '../types/task';
 import { ERRORS } from '../errors';
 import type { SearchTasksFilters, UpdateTaskData } from '../schemas/task';
+import { and, ownerClause } from './owner';
 
 /**
  * D1 access for the tasks table. This is the only place that talks to the
  * database about tasks; services call in here, routes never do.
+ *
+ * Every function here takes the owner, and takes it as a required argument
+ * rather than reading it from somewhere ambient. That is deliberate: a query
+ * that forgets to scope itself should not compile.
  */
 
 /** More terms than this stop narrowing the result and only cost a scan. */
@@ -23,13 +29,14 @@ export async function insertTask(db: D1Database, task: Task): Promise<Task> {
   const row = await db
     .prepare(
       `INSERT INTO tasks
-         (id, title, description, status, priority, due_date, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         (id, user_id, title, description, status, priority, due_date, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET id = id
        RETURNING *`,
     )
     .bind(
       task.id,
+      task.user_id,
       task.title,
       task.description,
       task.status,
@@ -47,8 +54,16 @@ export async function insertTask(db: D1Database, task: Task): Promise<Task> {
   return row;
 }
 
-export async function selectTaskById(db: D1Database, id: string): Promise<Task | null> {
-  const row = await db.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first<Task>();
+export async function selectTaskById(
+  db: D1Database,
+  id: string,
+  owner: Actor,
+): Promise<Task | null> {
+  const scope = ownerClause(owner);
+  const row = await db
+    .prepare(`SELECT * FROM tasks WHERE id = ?${and(scope)}`)
+    .bind(id, ...scope.binds)
+    .first<Task>();
   return row ?? null;
 }
 
@@ -61,6 +76,7 @@ export async function updateTask(
   id: string,
   changes: UpdateTaskData,
   updatedAt: string,
+  owner: Actor,
 ): Promise<Task | null> {
   const assignments: string[] = [];
   const binds: unknown[] = [];
@@ -73,10 +89,13 @@ export async function updateTask(
   }
 
   assignments.push('updated_at = ?');
-  binds.push(updatedAt, id);
+  const scope = ownerClause(owner);
+  binds.push(updatedAt, id, ...scope.binds);
 
   const row = await db
-    .prepare(`UPDATE tasks SET ${assignments.join(', ')} WHERE id = ? RETURNING *`)
+    .prepare(
+      `UPDATE tasks SET ${assignments.join(', ')} WHERE id = ?${and(scope)} RETURNING *`,
+    )
     .bind(...binds)
     .first<Task>();
 
@@ -91,11 +110,23 @@ export async function updateTask(
  *
  * Guarded on `status = 'done'` so a firing on an open task writes nothing at
  * all, which is what keeps `updated_at` honest.
+ *
+ * Takes an `Actor` rather than a login because the only caller that reaches a
+ * live schedule is the Workflow, which fires for a user who is not there.
  */
-export function reopenTaskStatement(db: D1Database, id: string, updatedAt: string) {
+export function reopenTaskStatement(
+  db: D1Database,
+  id: string,
+  updatedAt: string,
+  owner: Actor,
+) {
+  const scope = ownerClause(owner);
   return db
-    .prepare(`UPDATE tasks SET status = 'todo', updated_at = ? WHERE id = ? AND status = 'done'`)
-    .bind(updatedAt, id);
+    .prepare(
+      `UPDATE tasks SET status = 'todo', updated_at = ?` +
+        ` WHERE id = ? AND status = 'done'${and(scope)}`,
+    )
+    .bind(updatedAt, id, ...scope.binds);
 }
 
 /** Split free text into the terms that must each match. */
@@ -146,12 +177,19 @@ function splitSchedule(row: Task & ScheduleColumns): TaskWithSchedule {
  * `created_at` and `id` into scope. One extra row is requested so the caller
  * can report truncation without a second COUNT query.
  */
-export function buildSearchQuery(filters: SearchTasksFilters): {
+export function buildSearchQuery(
+  filters: SearchTasksFilters,
+  owner: Actor,
+): {
   sql: string;
   binds: unknown[];
 } {
-  const clauses: string[] = [];
-  const binds: unknown[] = [];
+  // First, so `idx_tasks_owner_status` and `idx_tasks_owner_due` are usable and
+  // so the predicate that matters most is impossible to miss when reading the
+  // generated SQL.
+  const scope = ownerClause(owner, 't.user_id');
+  const clauses: string[] = scope.sql ? [scope.sql] : [];
+  const binds: unknown[] = [...scope.binds];
 
   if (filters.status?.length) {
     clauses.push(`t.status IN (${filters.status.map(() => '?').join(', ')})`);
@@ -206,8 +244,9 @@ export function buildSearchQuery(filters: SearchTasksFilters): {
 export async function searchTasks(
   db: D1Database,
   filters: SearchTasksFilters,
+  owner: Actor,
 ): Promise<{ tasks: TaskWithSchedule[]; truncated: boolean }> {
-  const { sql, binds } = buildSearchQuery(filters);
+  const { sql, binds } = buildSearchQuery(filters, owner);
   const result = await db
     .prepare(sql)
     .bind(...binds)

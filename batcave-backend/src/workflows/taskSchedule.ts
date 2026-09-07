@@ -1,4 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import { SYSTEM } from '../actor';
 import { ScheduleService } from '../services/scheduleService';
 import type { ScheduleParams } from '../types/schedule';
 import type { Env } from '../types/task';
@@ -27,7 +28,14 @@ const RETRY = {
 export class TaskScheduleWorkflow extends WorkflowEntrypoint<Env, ScheduleParams> {
   async run(event: Readonly<WorkflowEvent<ScheduleParams>>, step: WorkflowStep) {
     const { scheduleId } = event.payload;
-    const service = () => new ScheduleService(this.env.DB, this.env.TASK_SCHEDULE);
+
+    // `SYSTEM`, because there is nobody here. The instance woke on its own
+    // clock, hours or weeks after the request that created the schedule, and
+    // the row it is about to read is reached by an id it was handed rather than
+    // by a query anyone could steer. Scoping it to a login would mean carrying
+    // one in the workflow payload and trusting it later, which is strictly
+    // worse than saying plainly that this caller acts for no one.
+    const service = () => new ScheduleService(this.env.DB, this.env.TASK_SCHEDULE, SYSTEM);
 
     // Unbounded on purpose: a recurring schedule ends when its row says so, not
     // when a counter here runs out. `MAX_NOTIFICATIONS` and the one-year horizon

@@ -9,7 +9,7 @@ import type { ChatRow } from '../db/chats';
 import { ERRORS } from '../errors';
 import { createChatSchema, renameChatSchema, sendMessageSchema } from '../schemas/chat';
 import { ChatService } from '../services/chatService';
-import type { Env } from '../types/task';
+import type { AppEnv } from '../types/task';
 
 /** What a turn produced, plus the chat as it stands after it. */
 export interface ChatResponse {
@@ -23,7 +23,7 @@ export interface ChatHistoryResponse {
   turns: ChatTurn[];
 }
 
-type ChatContext = Context<{ Bindings: Env }>;
+type ChatContext = Context<AppEnv>;
 
 /**
  * `allowEmpty` is for POST /api/chats, where sending no body at all means "an
@@ -59,7 +59,7 @@ async function runTurn(params: {
 }): Promise<Response> {
   const { c, chats, chatId, threadId, message, options, status } = params;
 
-  const agent = buildAgent(c.env, options);
+  const agent = buildAgent(c.env, c.get('user').login, options);
   const config = threadConfig(threadId);
 
   const state = await agent.graph.getState(config);
@@ -155,7 +155,7 @@ async function runTurn(params: {
  * model. Production uses the default, which is Groq.
  */
 export function createChatRoute(options: AgentOptions = {}) {
-  const chatsRoute = new Hono<{ Bindings: Env }>();
+  const chatsRoute = new Hono<AppEnv>();
 
   /** Starts a conversation, and runs its first turn when one was sent. */
   chatsRoute.post('/', async (c) => {
@@ -172,7 +172,7 @@ export function createChatRoute(options: AgentOptions = {}) {
       return c.json({ error: ERRORS.GROQ_API_KEY_MISSING }, 500);
     }
 
-    const chats = new ChatService(c.env.DB);
+    const chats = new ChatService(c.env.DB, c.get('user').login);
     const { chat, threadId } = await chats.create();
 
     if (!message) return c.json({ chat }, 201);
@@ -195,7 +195,7 @@ export function createChatRoute(options: AgentOptions = {}) {
     }
 
     // An unknown or malformed chat id surfaces through onError as 404 or 400.
-    const chats = new ChatService(c.env.DB);
+    const chats = new ChatService(c.env.DB, c.get('user').login);
     const chatId = c.req.param('chat_id');
     const threadId = await chats.activeThread(chatId);
 
@@ -215,7 +215,7 @@ export function createChatRoute(options: AgentOptions = {}) {
    * run, never calls the model, and works on a chat whose last turn failed.
    */
   chatsRoute.get('/:chat_id', async (c) => {
-    const chats = new ChatService(c.env.DB);
+    const chats = new ChatService(c.env.DB, c.get('user').login);
     const chatId = c.req.param('chat_id');
 
     const chat = await chats.get(chatId);
@@ -230,7 +230,7 @@ export function createChatRoute(options: AgentOptions = {}) {
    * `turn_count` exists to avoid.
    */
   chatsRoute.get('/', async (c) => {
-    const chats = new ChatService(c.env.DB);
+    const chats = new ChatService(c.env.DB, c.get('user').login);
     const { chats: rows, truncated } = await chats.list({ limit: c.req.query('limit') });
 
     return c.json({ chats: rows, truncated });
@@ -246,7 +246,7 @@ export function createChatRoute(options: AgentOptions = {}) {
       return c.json({ error: ERRORS.INVALID_CHAT_UPDATE, issues: parsed.error.issues }, 400);
     }
 
-    const chats = new ChatService(c.env.DB);
+    const chats = new ChatService(c.env.DB, c.get('user').login);
     const chat = await chats.rename(c.req.param('chat_id'), parsed.data);
 
     return c.json({ chat });
@@ -258,7 +258,7 @@ export function createChatRoute(options: AgentOptions = {}) {
    * writing checkpoints that nothing points at.
    */
   chatsRoute.delete('/:chat_id', async (c) => {
-    await new ChatService(c.env.DB).remove(c.req.param('chat_id'));
+    await new ChatService(c.env.DB, c.get('user').login).remove(c.req.param('chat_id'));
     return c.body(null, 204);
   });
 

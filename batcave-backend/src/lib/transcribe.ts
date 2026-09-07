@@ -14,8 +14,9 @@ export const TRANSCRIBE_MODEL = '@cf/openai/whisper-large-v3-turbo';
 
 /**
  * Roughly thirty minutes of Opus, which is far beyond the sixty seconds the
- * composer will record. It exists to bound what an unauthenticated caller can
- * push through a paid model, not to constrain the UI.
+ * composer will record. The route requires a signed-in caller, so this is not
+ * the door — it is the bound on what one signed-in caller can push through a
+ * paid model, and it is not there to constrain the UI.
  */
 export const AUDIO_MAX_BYTES = 8 * 1024 * 1024;
 

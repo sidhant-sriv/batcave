@@ -6,7 +6,8 @@ import { onError } from '../src/index';
 import { createChatRoute } from '../src/routes/chat';
 import { insertTask } from '../src/db/tasks';
 import { TaskService } from '../src/services/taskService';
-import type { Env, Task } from '../src/types/task';
+import type { AppEnv, Task } from '../src/types/task';
+import { OWNER, asUser } from './helpers/auth';
 import { send, startChat } from './helpers/chat';
 import { resetDb } from './helpers/reset';
 import { ScriptedModel, type ScriptStep } from './helpers/scriptedModel';
@@ -20,20 +21,22 @@ beforeEach(resetDb);
  */
 function appWith(script: ScriptStep[]) {
   const model = new ScriptedModel(script);
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<AppEnv>();
+  app.use('*', asUser());
   app.route('/api/chats', createChatRoute({ model }));
   app.onError(onError);
   return { app, model };
 }
 
 /** Starts a fresh conversation unless one is handed in to continue. */
-async function chat(app: Hono<{ Bindings: Env }>, message: string, chatId?: string) {
+async function chat(app: Hono<AppEnv>, message: string, chatId?: string) {
   return send(app, chatId ?? (await startChat()).chatId, message);
 }
 
 const seed = (row: Partial<Task> & { title: string }) =>
   insertTask(env.DB, {
     id: crypto.randomUUID(),
+    user_id: OWNER,
     description: null,
     status: 'todo',
     priority: 'medium',
@@ -75,7 +78,7 @@ describe('the loop', () => {
     expect(body.actions).toHaveLength(1);
     expect(body.actions[0]).toMatchObject({ tool: 'create_task', ok: true });
 
-    const { tasks } = await new TaskService(env.DB).search({});
+    const { tasks } = await new TaskService(env.DB, OWNER).search({});
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ title: 'Renew the domain', priority: 'high' });
   });
@@ -92,7 +95,7 @@ describe('the loop', () => {
 
     expect(body.actions.map((action) => action.tool)).toEqual(['search_tasks', 'update_task']);
     expect(body.actions.every((action) => action.ok)).toBe(true);
-    expect((await new TaskService(env.DB).getById(task.id))?.status).toBe('done');
+    expect((await new TaskService(env.DB, OWNER).getById(task.id))?.status).toBe('done');
   });
 
   it('gives the model each task\'s schedule, and the filter to ask only for scheduled ones', async () => {
@@ -151,7 +154,7 @@ describe('the loop', () => {
     expect(second.body.actions).toEqual([
       expect.objectContaining({ tool: 'update_task', ok: true }),
     ]);
-    expect((await new TaskService(env.DB).getById(task.id))?.status).toBe('done');
+    expect((await new TaskService(env.DB, OWNER).getById(task.id))?.status).toBe('done');
   });
 
   it('gives each conversation its own memory', async () => {
@@ -172,7 +175,7 @@ describe('the loop', () => {
       ok: false,
       error: ERRORS.AGENT_TASK_ID_NOT_SEEN,
     });
-    expect((await new TaskService(env.DB).getById(task.id))?.status).toBe('todo');
+    expect((await new TaskService(env.DB, OWNER).getById(task.id))?.status).toBe('todo');
   });
 });
 
@@ -195,7 +198,7 @@ describe('the id guard', () => {
       ['update_task', true],
     ]);
     expect(body.actions[0]!.error).toBe(ERRORS.AGENT_TASK_ID_NOT_SEEN);
-    expect((await new TaskService(env.DB).getById(task.id))?.status).toBe('done');
+    expect((await new TaskService(env.DB, OWNER).getById(task.id))?.status).toBe('done');
   });
 
   it('refuses an id the model invented', async () => {
@@ -249,7 +252,7 @@ describe('tool arguments', () => {
     expect(status).toBe(200);
     expect(body.actions[0]!.ok).toBe(false);
     expect(body.actions[1]!.ok).toBe(true);
-    expect((await new TaskService(env.DB).search({})).tasks).toHaveLength(1);
+    expect((await new TaskService(env.DB, OWNER).search({})).tasks).toHaveLength(1);
   });
 });
 

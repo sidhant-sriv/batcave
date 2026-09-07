@@ -100,9 +100,14 @@ describe('discovery', () => {
     expect(body.code_challenge_methods_supported).toContain('S256');
   });
 
-  it('leaves the REST API open, which is the asymmetry the README explains', async () => {
+  it('challenges the REST API too, with a body the frontend can read', async () => {
     const response = await SELF.fetch('https://test/api/tasks?limit=1');
-    expect(response.status).toBe(200);
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('www-authenticate')).toContain('Bearer');
+    // JSON rather than the RFC 9728 challenge `/mcp` answers with: this one is
+    // read by `ApiError` in the frontend, not by a client running discovery.
+    expect((await json(response)).error).toBe(ERRORS.UNAUTHORIZED);
   });
 });
 

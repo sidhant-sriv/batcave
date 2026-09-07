@@ -3,10 +3,11 @@ import { useCallback, useSyncExternalStore } from 'react';
 /**
  * Local preferences: theme and row density.
  *
- * Both live in `localStorage` because there is no auth and therefore nowhere
- * server-side to hang a per-user setting. When auth arrives these become the
- * first two fields of a preferences record; until then the storage key is
- * namespaced so that move is a migration rather than an archaeology exercise.
+ * Both live in `localStorage` rather than on the account, which is a choice
+ * now that there are accounts. They are properties of a screen, not of a
+ * person: the same login on a phone and on a desktop wants different answers,
+ * and syncing them would make one device's preference overwrite the other's.
+ * The keys are namespaced in case that judgement changes.
  *
  * The theme is written straight onto `<html data-theme>`, matching the inline
  * script in index.html that stamps it before first paint.

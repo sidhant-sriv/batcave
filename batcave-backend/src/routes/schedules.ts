@@ -1,17 +1,18 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { ERRORS } from '../errors';
 import { listSchedulesSchema } from '../schemas/schedule';
 import { ScheduleService } from '../services/scheduleService';
-import type { Env } from '../types/task';
+import type { AppEnv } from '../types/task';
 
 /**
  * The schedules a user has. Read and cancel only: schedules are created by the
  * agent, which is where the language that describes them ("every Monday", "the
  * day before it's due") can be resolved into a cron or an instant.
  */
-export const schedulesRoute = new Hono<{ Bindings: Env }>();
+export const schedulesRoute = new Hono<AppEnv>();
 
-const service = (env: Env) => new ScheduleService(env.DB, env.TASK_SCHEDULE);
+const service = (c: Context<AppEnv>) =>
+  new ScheduleService(c.env.DB, c.env.TASK_SCHEDULE, c.get('user').login);
 
 schedulesRoute.get('/', async (c) => {
   const queries = c.req.queries();
@@ -30,7 +31,7 @@ schedulesRoute.get('/', async (c) => {
     return c.json({ error: ERRORS.INVALID_SCHEDULE_LIST, issues: parsed.error.issues }, 400);
   }
 
-  const { schedules, truncated } = await service(c.env).listSchedules(parsed.data);
+  const { schedules, truncated } = await service(c).listSchedules(parsed.data);
   return c.json({ schedules, truncated });
 });
 
@@ -40,6 +41,6 @@ schedulesRoute.get('/', async (c) => {
  * user's list. A ScheduleNotFoundError surfaces through onError as 404.
  */
 schedulesRoute.delete('/:id', async (c) => {
-  const schedule = await service(c.env).cancel(c.req.param('id'));
+  const schedule = await service(c).cancel(c.req.param('id'));
   return c.json({ schedule });
 });

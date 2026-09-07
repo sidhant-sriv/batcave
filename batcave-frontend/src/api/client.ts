@@ -1,3 +1,5 @@
+import { getAccessToken, refresh } from '@/auth/session';
+import { BASE_URL } from './base';
 import type { ApiErrorBody, ApiIssue } from './types';
 
 /**
@@ -8,15 +10,17 @@ import type { ApiErrorBody, ApiIssue } from './types';
  * text. The statuses that actually change behaviour:
  *
  *   400  validation — `issues` maps to form fields
+ *   401  the session is gone — handled here, and only surfaced if it stays gone
  *   404  the record is gone — an empty state, not an error banner
  *   409  a turn is already running on this conversation
  *   500  misconfiguration — not retryable
  *   502  the model was unreachable — retryable
  *   503  a tool could not reach D1 — retryable, and the backend resumes the turn
  *   504  the model timed out — retryable
+ *
+ * Being the only exit is also what makes the bearer token a single concern:
+ * nothing else in the app has to remember to attach one.
  */
-
-const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8787';
 
 export class ApiError extends Error {
   constructor(
@@ -26,6 +30,11 @@ export class ApiError extends Error {
   ) {
     super(message);
     this.name = 'ApiError';
+  }
+
+  /** The session ended. The shell swaps itself for the sign-in screen. */
+  get unauthorized(): boolean {
+    return this.status === 401;
   }
 
   /**
@@ -78,35 +87,19 @@ interface RequestOptions {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, idempotencyKey, signal } = options;
+  const first = await send(path, options);
 
-  // A Blob is a recording on its way to /api/transcribe. It already carries its
-  // own content type and has to arrive as bytes, so it is the one body that is
-  // passed through rather than serialised.
-  const isBlob = body instanceof Blob;
-
-  const headers: Record<string, string> = {};
-  if (body !== undefined) {
-    headers['Content-Type'] = isBlob
-      ? body.type || 'application/octet-stream'
-      : 'application/json';
-  }
-  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
-
-  let response: Response;
-  try {
-    response = await fetch(`${BASE_URL}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : isBlob ? body : JSON.stringify(body),
-      signal,
-    });
-  } catch (error) {
-    // An abort is the caller's own doing and must not be laundered into a
-    // network failure the UI would show a banner for.
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    throw new NetworkError(error);
-  }
+  /*
+   * Access tokens last an hour, so a 401 on a page someone left open is the
+   * ordinary case rather than a failure. Exactly one retry, and only after a
+   * refresh actually succeeded: a second 401 means the freshly minted token was
+   * refused too, which is not something trying again will fix.
+   *
+   * A failed refresh has already cleared the stored token, so `AuthProvider`
+   * hears about it and the sign-in screen comes back. The 401 still propagates,
+   * which is what stops a query from spinning while that happens.
+   */
+  const response = first.status === 401 && (await refresh()) ? await send(path, options) : first;
 
   // 204 No Content: DELETE succeeds with no body to parse.
   if (response.status === 204) return undefined as T;
@@ -124,6 +117,42 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   return payload as T;
+}
+
+async function send(path: string, options: RequestOptions): Promise<Response> {
+  const { method = 'GET', body, idempotencyKey, signal } = options;
+
+  // A Blob is a recording on its way to /api/transcribe. It already carries its
+  // own content type and has to arrive as bytes, so it is the one body that is
+  // passed through rather than serialised.
+  const isBlob = body instanceof Blob;
+
+  const headers: Record<string, string> = {};
+  if (body !== undefined) {
+    headers['Content-Type'] = isBlob
+      ? body.type || 'application/octet-stream'
+      : 'application/json';
+  }
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+
+  // Read per attempt rather than per call, so the retry above picks up the
+  // token the refresh just stored.
+  const token = getAccessToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  try {
+    return await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : isBlob ? body : JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    // An abort is the caller's own doing and must not be laundered into a
+    // network failure the UI would show a banner for.
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new NetworkError(error);
+  }
 }
 
 function safeParse(text: string): unknown {

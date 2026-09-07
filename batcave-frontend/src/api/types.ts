@@ -17,6 +17,8 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
 export interface Task {
   id: string;
+  /** The GitHub login that owns it, which is always the signed-in caller's own. */
+  user_id: string;
   title: string;
   description: string | null;
   status: TaskStatus;

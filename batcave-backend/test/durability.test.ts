@@ -10,7 +10,8 @@ import { onError } from '../src/index';
 import { createChatRoute } from '../src/routes/chat';
 import { TaskService } from '../src/services/taskService';
 import { dbFailingOn, dbLosingWriteAfterInsert } from './helpers/db';
-import type { Env } from '../src/types/task';
+import type { AppEnv, Env } from '../src/types/task';
+import { OWNER, asUser } from './helpers/auth';
 import { send, startChat } from './helpers/chat';
 import { resetDb } from './helpers/reset';
 import { ScriptedModel, type ScriptStep } from './helpers/scriptedModel';
@@ -19,7 +20,8 @@ beforeEach(resetDb);
 
 function appWith(script: ScriptStep[]) {
   const model = new ScriptedModel(script);
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<AppEnv>();
+  app.use('*', asUser());
   app.route('/api/chats', createChatRoute({ model }));
   app.onError(onError);
   return { app, model };
@@ -28,7 +30,7 @@ function appWith(script: ScriptStep[]) {
 /** `key` fixes the run key, so a retry is recognisable no matter what the
  *  thread's checkpoint did in between. */
 async function chat(
-  app: Hono<{ Bindings: Env }>,
+  app: Hono<AppEnv>,
   options: { chatId: string; message: string; key?: string; bindings?: Partial<Env> },
 ) {
   return send(app, options.chatId, options.message, {
@@ -42,7 +44,7 @@ const createStep = (title: string, id = 'call_1'): ScriptStep => ({
 });
 
 const threadState = (threadId: string) =>
-  buildAgent(env).graph.getState(threadConfig(threadId));
+  buildAgent(env, OWNER).graph.getState(threadConfig(threadId));
 
 const runFor = async (threadId: string, message: string, key?: string) =>
   selectRun(env.DB, await runKey({ header: key, threadId, message, checkpointId: null }));
@@ -190,7 +192,7 @@ describe('a tool that cannot reach D1', () => {
     expect(retry.body.actions).toEqual([expect.objectContaining({ tool: 'create_task', ok: true })]);
     expect((await runFor(threadId, 'x', 'infra'))?.status).toBe('completed');
 
-    const { tasks } = await new TaskService(env.DB).search({});
+    const { tasks } = await new TaskService(env.DB, OWNER).search({});
     expect(tasks).toHaveLength(1);
   });
 });
@@ -215,7 +217,7 @@ describe('a tool that committed but whose result was never recorded', () => {
     expect(failed.status).toBe(500);
     expect((await runFor(threadId, 'x', 'lost-write'))?.status).toBe('failed');
 
-    const before = await new TaskService(env.DB).search({});
+    const before = await new TaskService(env.DB, OWNER).search({});
     expect(before.tasks).toHaveLength(1);
 
     const retry = await chat(app, {
@@ -225,7 +227,7 @@ describe('a tool that committed but whose result was never recorded', () => {
     });
 
     expect(retry.status).toBe(200);
-    const after = await new TaskService(env.DB).search({});
+    const after = await new TaskService(env.DB, OWNER).search({});
     expect(after.tasks).toHaveLength(1);
     // Same row, because the id came from the tool call rather than a generator.
     expect(after.tasks[0]!.id).toBe(before.tasks[0]!.id);
@@ -301,7 +303,7 @@ describe('a schedule whose clock could not be started', () => {
     }) as unknown as Env['TASK_SCHEDULE'];
 
   it('fails the turn rather than reporting a reminder that will never fire', async () => {
-    const task = await new TaskService(env.DB).create({ title: 'Renew the domain' });
+    const task = await new TaskService(env.DB, OWNER).create({ title: 'Renew the domain' });
     const { app } = appWith([
       { toolCalls: [{ name: 'search_tasks', args: { query: 'domain' }, id: 'call_1' }] },
       {
@@ -329,7 +331,7 @@ describe('a schedule whose clock could not be started', () => {
   });
 
   it('is repaired by the retry, which finds its own row and starts the instance', async () => {
-    const task = await new TaskService(env.DB).create({ title: 'Renew the domain' });
+    const task = await new TaskService(env.DB, OWNER).create({ title: 'Renew the domain' });
     const at = remindAt();
     const { app } = appWith([
       { toolCalls: [{ name: 'search_tasks', args: { query: 'domain' }, id: 'call_1' }] },

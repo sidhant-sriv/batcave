@@ -4,6 +4,9 @@ import { cors } from 'hono/cors';
 import { findInfrastructureError } from './agent/middleware/escalate';
 import { classifyModelError } from './agent/modelErrors';
 import { ERRORS } from './errors';
+import { requireUser } from './middleware/auth';
+import { allowedOrigins } from './origins';
+import { authRoute } from './routes/auth';
 import { chatsRoute } from './routes/chat';
 import { notificationsRoute } from './routes/notifications';
 import { schedulesRoute } from './routes/schedules';
@@ -18,11 +21,7 @@ import {
   ScheduleValidationError,
 } from './services/scheduleService';
 import { TaskNotFoundError, TaskValidationError } from './services/taskService';
-import type { Env } from './types/task';
-
-
-/** Where the frontend runs in local development, when nothing is configured. */
-const DEV_ORIGIN = 'http://localhost:5173';
+import type { AppEnv, Env } from './types/task';
 
 /**
  * Everything that is not the MCP endpoint: the REST API the frontend calls, and
@@ -32,7 +31,7 @@ const DEV_ORIGIN = 'http://localhost:5173';
  * one — the GitHub calls have to be swappable in a test.
  */
 export function createApp(options: OAuthRouteOptions = {}) {
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<AppEnv>();
 
   /**
    * The frontend is a separate Pages deployment, so every browser call is
@@ -42,18 +41,30 @@ export function createApp(options: OAuthRouteOptions = {}) {
    * returning the whole list is what keeps the response cacheable per origin.
    */
   app.use('/api/*', cors({
-    origin: (origin, c) => {
-      const configured = (c.env as Env).CORS_ORIGINS ?? DEV_ORIGIN;
-      const allowed = configured.split(',').map((entry) => entry.trim());
-
-      return allowed.includes(origin) ? origin : null;
-    },
+    origin: (origin, c) => (allowedOrigins(c.env as Env).includes(origin) ? origin : null),
     allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Idempotency-Key'],
+    allowHeaders: ['Content-Type', 'Idempotency-Key', 'Authorization'],
     maxAge: 86400,
   }));
 
   app.get('/health', (c) => c.json({ status: 'ok' }));
+
+  /**
+   * ORDER MATTERS HERE, so it is asserted in `test/auth.test.ts`.
+   *
+   * `/api/auth/config` has to answer a browser that has no token yet, and Hono
+   * runs the handlers it matched in registration order. Mounting this router
+   * ahead of the blanket guard is what lets `config` reply and stop the chain
+   * before `requireUser` is ever reached; `/me`, in the same router, carries its
+   * own guard so it does not depend on that.
+   *
+   * The CORS middleware above stays ahead of both, so a preflight — which
+   * carries no `Authorization` header, and never could — is answered as a
+   * preflight rather than challenged as an anonymous request.
+   */
+  app.route('/api/auth', authRoute);
+
+  app.use('/api/*', requireUser);
 
   app.route('/api/tasks', tasksRoute);
   app.route('/api/chats', chatsRoute);
@@ -80,7 +91,7 @@ export function createApp(options: OAuthRouteOptions = {}) {
  * unwrapped from whatever the graph added on the way out, so a D1 outage inside
  * a tool surfaces as 503 rather than a generic 500 or, worse, a 200.
  */
-export const onError: ErrorHandler<{ Bindings: Env }> = (error, c) => {
+export const onError: ErrorHandler<AppEnv> = (error, c) => {
   if (error instanceof TaskValidationError) {
     return c.json({ error: error.message, issues: error.issues }, 400);
   }
@@ -123,11 +134,12 @@ export const onError: ErrorHandler<{ Bindings: Env }> = (error, c) => {
  * The Worker: an OAuth 2.1 authorization server with the MCP endpoint behind it,
  * and everything else carrying on exactly as before.
  *
- * WHAT IS PROTECTED AND WHAT IS NOT. `apiRoute` is only `/mcp`. The REST API
- * stays open, because the frontend has no auth and inventing one for it is a
- * different project; the MCP endpoint is where a stranger with a client could
- * otherwise reach in, so that is where the door is. The README says this
- * plainly rather than letting the asymmetry look accidental.
+ * WHAT IS PROTECTED, AND BY WHICH HALF. `apiRoute` is only `/mcp`: the library
+ * validates that one itself and puts the grant on `ctx.props`. The REST API is
+ * equally closed, but guarded by `requireUser` inside the Hono app instead —
+ * see `middleware/auth.ts` for why, which comes down to CORS and error shape.
+ * Both doors are the same lock: one authorization server, one `tasks` scope,
+ * one GitHub login on the other side.
  *
  * The library owns `/oauth/token`, `/oauth/register` and the two `.well-known`
  * documents; it validates bearer tokens on `/mcp` and puts the grant on

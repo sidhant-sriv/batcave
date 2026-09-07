@@ -73,15 +73,24 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
  *
  * Unlike `TaskService` this one does import from `agent/`, which is honest
  * rather than a leak: tasks exist without the agent, conversations do not.
+ *
+ * Scoped to one login, like `TaskService`. `chat_threads`, the checkpoints and
+ * the run rows carry no owner of their own; they are only ever reached after a
+ * chat has been resolved for this owner, which is what makes `db/agentState.ts`
+ * safe to leave keyed on `thread_id` alone.
  */
 export class ChatService {
-  constructor(private readonly db: D1Database) {}
+  constructor(
+    private readonly db: D1Database,
+    private readonly owner: string,
+  ) {}
 
   /** A new conversation and the thread it starts on. */
   async create(): Promise<{ chat: ChatRow; threadId: string }> {
     const now = new Date().toISOString();
     const chat: ChatRow = {
       id: uuidv7(),
+      user_id: this.owner,
       title: null,
       turn_count: 0,
       created_at: now,
@@ -96,7 +105,7 @@ export class ChatService {
 
   async get(chatId: string): Promise<ChatRow> {
     const id = this.validId(chatId);
-    const chat = await selectChat(this.db, id);
+    const chat = await selectChat(this.db, id, this.owner);
     if (!chat) throw new ChatNotFoundError(id);
     return chat;
   }
@@ -104,7 +113,7 @@ export class ChatService {
   /** The thread the next turn should run on. */
   async activeThread(chatId: string): Promise<string> {
     const id = this.validId(chatId);
-    const threadId = await selectActiveThread(this.db, id);
+    const threadId = await selectActiveThread(this.db, id, this.owner);
     if (!threadId) throw new ChatNotFoundError(id);
     return threadId;
   }
@@ -116,7 +125,7 @@ export class ChatService {
     }
 
     const { limit } = parsed.data;
-    const rows = await listChats(this.db, limit);
+    const rows = await listChats(this.db, limit, this.owner);
 
     return { chats: rows.slice(0, limit), truncated: rows.length > limit };
   }
@@ -132,7 +141,7 @@ export class ChatService {
     await this.get(id);
 
     const turns: ChatTurn[] = [];
-    for (const threadId of await selectThreads(this.db, id)) {
+    for (const threadId of await selectThreads(this.db, id, this.owner)) {
       turns.push(...((await threadHistory(this.db, threadId)) ?? []));
     }
 
@@ -146,7 +155,13 @@ export class ChatService {
    */
   async touch(chatId: string, message: string): Promise<ChatRow> {
     const id = this.validId(chatId);
-    const row = await touchChat(this.db, id, new Date().toISOString(), titleFrom(message));
+    const row = await touchChat(
+      this.db,
+      id,
+      new Date().toISOString(),
+      titleFrom(message),
+      this.owner,
+    );
     if (!row) throw new ChatNotFoundError(id);
     return row;
   }
@@ -158,7 +173,7 @@ export class ChatService {
       throw new ChatValidationError(ERRORS.INVALID_CHAT_UPDATE, parsed.error.issues);
     }
 
-    const row = await renameChat(this.db, id, parsed.data.title ?? null);
+    const row = await renameChat(this.db, id, parsed.data.title ?? null, this.owner);
     if (!row) throw new ChatNotFoundError(id);
     return row;
   }
@@ -173,14 +188,14 @@ export class ChatService {
     const id = this.validId(chatId);
     await this.get(id);
 
-    const threadIds = await selectThreads(this.db, id);
+    const threadIds = await selectThreads(this.db, id, this.owner);
     const live = await selectLiveRun(this.db, threadIds, nowSeconds() - RUN_TTL_SECONDS);
     if (live) throw new ChatBusyError(id);
 
     for (const threadId of threadIds) {
       await deleteThread(this.db, threadId);
     }
-    await deleteChat(this.db, id);
+    await deleteChat(this.db, id, this.owner);
   }
 
   private validId(chatId: string): string {

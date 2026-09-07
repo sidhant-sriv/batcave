@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ERRORS } from '../src/errors';
 import { onError } from '../src/index';
 import { createChatRoute, type ChatHistoryResponse } from '../src/routes/chat';
-import type { Env } from '../src/types/task';
+import type { AppEnv, Env } from '../src/types/task';
+import { asUser } from './helpers/auth';
 import { send, startChat } from './helpers/chat';
 import { dbFailingOn } from './helpers/db';
 import { resetDb } from './helpers/reset';
@@ -13,14 +14,15 @@ import { ScriptedModel, type ScriptStep } from './helpers/scriptedModel';
 beforeEach(resetDb);
 
 function appWith(script: ScriptStep[]) {
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<AppEnv>();
+  app.use('*', asUser());
   app.route('/api/chats', createChatRoute({ model: new ScriptedModel(script) }));
   app.onError(onError);
   return app;
 }
 
 async function history(
-  app: Hono<{ Bindings: Env }>,
+  app: Hono<AppEnv>,
   chatId: string,
   bindings: Partial<Env> = {},
 ) {

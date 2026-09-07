@@ -1,4 +1,4 @@
-import { SELF, env, introspectWorkflowInstance } from 'cloudflare:test';
+import { env, introspectWorkflowInstance } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { insertTask } from '../src/db/tasks';
 import { ERRORS } from '../src/errors';
@@ -14,6 +14,7 @@ import {
 import { TaskNotFoundError, TaskService } from '../src/services/taskService';
 import type { Notification, Schedule } from '../src/types/schedule';
 import type { Task } from '../src/types/task';
+import { OWNER, api } from './helpers/auth';
 import { resetDb } from './helpers/reset';
 import { fakeWorkflow } from './helpers/workflow';
 
@@ -30,11 +31,12 @@ const IN_AN_HOUR = '2026-09-06T13:00:00.000Z';
  * below, against the real binding.
  */
 const service = (now: Date = NOW, workflow = fakeWorkflow()) =>
-  new ScheduleService(env.DB, workflow, () => now);
+  new ScheduleService(env.DB, workflow, OWNER, () => now);
 
 const seed = (row: Partial<Task> & { title: string }) =>
   insertTask(env.DB, {
     id: crypto.randomUUID(),
+    user_id: OWNER,
     description: null,
     status: 'todo',
     priority: 'medium',
@@ -277,13 +279,13 @@ describe('a firing', () => {
       ended_at: NOW.toISOString(),
     });
     // A one-shot never touches the task.
-    expect((await new TaskService(env.DB).getById(task.id))?.status).toBe('todo');
+    expect((await new TaskService(env.DB, OWNER).getById(task.id))?.status).toBe('todo');
   });
 
   it('records a one-shot whose task was finished as skipped', async () => {
     const task = await seed({ title: 'Renew the domain' });
     const { schedule } = await service().scheduleOnce(task.id, { remind_at: IN_AN_HOUR });
-    await new TaskService(env.DB).update(task.id, { status: 'done' });
+    await new TaskService(env.DB, OWNER).update(task.id, { status: 'done' });
 
     expect(await service().notify(schedule.id, 1)).toEqual({ stop: true, outcome: 'skipped' });
     expect((await readNotifications(schedule.id))[0]?.outcome).toBe('skipped');
@@ -310,7 +312,7 @@ describe('a firing', () => {
 
     await service(new Date('2026-09-07T09:00:00.000Z')).notify(schedule.id, 1);
 
-    expect((await new TaskService(env.DB).getById(task.id))?.status).toBe('todo');
+    expect((await new TaskService(env.DB, OWNER).getById(task.id))?.status).toBe('todo');
     expect((await readNotifications(schedule.id))[0]).toMatchObject({
       outcome: 'notified',
       reopened: 1,
@@ -410,7 +412,7 @@ describe('the workflow', () => {
       await m.disableSleeps();
     });
 
-    const { schedule } = await new ScheduleService(env.DB, env.TASK_SCHEDULE).scheduleOnce(
+    const { schedule } = await new ScheduleService(env.DB, env.TASK_SCHEDULE, OWNER).scheduleOnce(
       task.id,
       { remind_at: new Date(Date.now() + 3_600_000).toISOString() },
       { id },
@@ -436,14 +438,14 @@ describe('the workflow', () => {
       await m.disableSleeps([{ name: 'sleep #1' }]);
     });
 
-    const schedules = new ScheduleService(env.DB, env.TASK_SCHEDULE);
+    const schedules = new ScheduleService(env.DB, env.TASK_SCHEDULE, OWNER);
     const { schedule } = await schedules.scheduleRecurring(task.id, { cron: '0 9 * * 1' }, { id });
 
     expect(await instance.waitForStepResult({ name: 'notify #1' })).toMatchObject({ stop: false });
 
     // It fired, reopened the task, and armed the next occurrence.
     expect((await readNotifications(schedule.id))[0]).toMatchObject({ reopened: 1 });
-    expect((await new TaskService(env.DB).getById(task.id))?.status).toBe('todo');
+    expect((await new TaskService(env.DB, OWNER).getById(task.id))?.status).toBe('todo');
     expect(await readSchedule(schedule.id)).toMatchObject({
       status: 'active',
       notification_count: 1,
@@ -460,7 +462,7 @@ describe('the REST surface', () => {
     await service().scheduleOnce(later.id, { remind_at: '2026-09-08T09:00:00.000Z' });
     await service().scheduleOnce(soon.id, { remind_at: IN_AN_HOUR });
 
-    const body = await json(await SELF.fetch('https://x/api/schedules'));
+    const body = await json(await api('/api/schedules'));
     expect(body.schedules.map((row: any) => row.task.title)).toEqual(['Soon', 'Later']);
     expect(body.truncated).toBe(false);
   });
@@ -470,15 +472,15 @@ describe('the REST surface', () => {
     const { schedule } = await service().scheduleOnce(task.id, { remind_at: IN_AN_HOUR });
     await service().cancel(schedule.id);
 
-    const active = await json(await SELF.fetch('https://x/api/schedules?status=active'));
+    const active = await json(await api('/api/schedules?status=active'));
     expect(active.schedules).toHaveLength(0);
 
-    const cancelled = await json(await SELF.fetch('https://x/api/schedules?status=cancelled'));
+    const cancelled = await json(await api('/api/schedules?status=cancelled'));
     expect(cancelled.schedules).toHaveLength(1);
   });
 
   it('rejects a status that is not one', async () => {
-    const response = await SELF.fetch('https://x/api/schedules?status=pending');
+    const response = await api('/api/schedules?status=pending');
     expect(response.status).toBe(400);
     expect((await json(response)).error).toBe(ERRORS.INVALID_SCHEDULE_LIST);
   });
@@ -487,13 +489,13 @@ describe('the REST surface', () => {
     const task = await seed({ title: 'Water the plants' });
     const { schedule } = await service().scheduleOnce(task.id, { remind_at: IN_AN_HOUR });
 
-    const response = await SELF.fetch(`https://x/api/schedules/${schedule.id}`, {
+    const response = await api(`/api/schedules/${schedule.id}`, {
       method: 'DELETE',
     });
     expect(response.status).toBe(200);
     expect((await json(response)).schedule.status).toBe('cancelled');
 
-    const second = await SELF.fetch(`https://x/api/schedules/${schedule.id}`, { method: 'DELETE' });
+    const second = await api(`/api/schedules/${schedule.id}`, { method: 'DELETE' });
     expect(second.status).toBe(404);
   });
 
@@ -503,18 +505,18 @@ describe('the REST surface', () => {
     await service().notify(schedule.id, 1);
     const id = await notificationId(schedule.id, 1);
 
-    const unread = await json(await SELF.fetch('https://x/api/notifications?acknowledged=false'));
+    const unread = await json(await api('/api/notifications?acknowledged=false'));
     expect(unread.notifications).toHaveLength(1);
     expect(unread.notifications[0].task.title).toBe('Renew the domain');
 
-    const response = await SELF.fetch(`https://x/api/notifications/${id}/acknowledge`, {
+    const response = await api(`/api/notifications/${id}/acknowledge`, {
       method: 'POST',
     });
     expect(response.status).toBe(200);
     expect((await json(response)).notification.acknowledged_at).toBeTruthy();
 
     const stillUnread = await json(
-      await SELF.fetch('https://x/api/notifications?acknowledged=false'),
+      await api('/api/notifications?acknowledged=false'),
     );
     expect(stillUnread.notifications).toHaveLength(0);
   });
@@ -528,14 +530,14 @@ describe('the REST surface', () => {
     await service().acknowledge(id);
     await expect(service().acknowledge(id)).rejects.toBeInstanceOf(NotificationNotFoundError);
 
-    const response = await SELF.fetch(`https://x/api/notifications/${id}/acknowledge`, {
+    const response = await api(`/api/notifications/${id}/acknowledge`, {
       method: 'POST',
     });
     expect(response.status).toBe(404);
   });
 
   it('rejects a notification id that is not a uuid', async () => {
-    const response = await SELF.fetch('https://x/api/notifications/nope/acknowledge', {
+    const response = await api('/api/notifications/nope/acknowledge', {
       method: 'POST',
     });
     expect(response.status).toBe(400);

@@ -1,18 +1,55 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Navigate, Route, Routes, useSearchParams } from 'react-router';
+import { Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { MessageSquare } from 'lucide-react';
 import { getChat } from '@/api/chats';
+import { useAuth } from '@/auth/AuthProvider';
 import { ConsolePane } from '@/components/agent/ConsolePane';
 import { Navigator } from '@/components/nav/Navigator';
 import { OfflineBanner } from '@/components/state/States';
 import { AboutRoute } from '@/routes/AboutRoute';
+import { AuthCallbackRoute } from '@/routes/AuthCallbackRoute';
 import { SchedRoute } from '@/routes/SchedRoute';
+import { SignInRoute } from '@/routes/SignInRoute';
 import { TaskIndex } from '@/routes/TaskIndex';
 import { cn } from '@/lib/cn';
 import { useLayout } from '@/lib/layout';
 import { useConsoleOpen } from '@/lib/prefs';
 import { ShellContext, type Shell } from '@/lib/shell';
+
+/**
+ * The gate, and then the shell.
+ *
+ * Three states rather than two. `loading` is the moment on every page load when
+ * the stored refresh token is being spent for an access token — rendering the
+ * shell during it would fire a screenful of queries that all 401, and rendering
+ * the sign-in screen would flash it at someone who is already signed in.
+ *
+ * The callback route is checked before any of that, because it is the one page
+ * whose whole job is to run while nobody is signed in yet.
+ */
+export function App() {
+  const { status } = useAuth();
+  const { pathname } = useLocation();
+
+  if (pathname === '/auth/callback') return <AuthCallbackRoute />;
+  if (status === 'loading') return <Booting />;
+  if (status === 'anonymous') return <SignInRoute />;
+
+  return <Shell />;
+}
+
+/**
+ * Nothing but the wordmark. A spinner here would be a promise that something is
+ * taking a while; this is one KV read and is usually over before it paints.
+ */
+function Booting() {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center bg-app">
+      <span className="font-mono text-micro uppercase text-disabled">Batcave</span>
+    </div>
+  );
+}
 
 /**
  * The shell: a navigator, the active surface, and the console beside it.
@@ -33,7 +70,7 @@ import { ShellContext, type Shell } from '@/lib/shell';
  * state so a conversation is still linkable and survives a reload.
  */
 
-export function App() {
+function Shell() {
   const layout = useLayout();
   const [searchParams, setSearchParams] = useSearchParams();
   const [dockOpen, setDockOpen] = useConsoleOpen();

@@ -31,6 +31,7 @@ const STACK: Array<[string, React.ReactNode]> = [
   ['Frontend', 'React 19, Vite, TanStack Query, Tailwind 4, on Cloudflare Pages'],
   ['API', 'Hono on Cloudflare Workers'],
   ['MCP', 'Remote MCP server on the same Worker, behind OAuth 2.1 with GitHub sign-in'],
+  ['Auth', 'The same OAuth 2.1 server signs in the web app — one authorization server, two clients'],
   ['Data', 'Cloudflare D1, with migrations'],
   ['Scheduling', 'Cloudflare Workflows, one instance per schedule'],
   ['Agent', 'LangGraph, with a Groq-hosted model'],
@@ -55,6 +56,14 @@ const NOTES: Array<[string, string]> = [
   [
     'The agent is not the only way in',
     'The same six capabilities are served over the Model Context Protocol at /mcp, so any MCP client can drive the task list. It is stateless, per the 2026-07-28 revision, so it needs no Durable Object. Access is an OAuth 2.1 authorization server on the same Worker: the library issues tokens and enforces PKCE, and this Worker owns consent, the GitHub round trip, and the single-use state that binds the callback to the browser that started it.',
+  ],
+  [
+    'One authorization server, two kinds of client',
+    'The OAuth server was built so an MCP client could reach /mcp as a GitHub user; the web app is now a second client of the same server, and every task and conversation carries the login that owns it. The frontend is a public client, so PKCE is the only thing standing between a stolen authorization code and a token. It holds a bearer token rather than a session cookie because Pages and Workers are separate sites — a cookie between them would need SameSite=None, which Safari drops. Consent is skipped for the app itself and shown to every other client: "Allow Batcave to access Batcave?" only teaches people to click through consent screens.',
+  ],
+  [
+    'The clock acts for nobody',
+    'Every service is constructed with the login whose rows it may touch, so forgetting to scope a query is a compile error rather than a review catch. The one caller with no login is the Workflow, which wakes hours or weeks after the request that created its schedule; it passes an explicit SYSTEM symbol, which nothing derived from a request could ever produce by accident.',
   ],
   [
     'The client states what the API can actually do',

@@ -1,9 +1,10 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { deleteCookie, getSignedCookie, setSignedCookie } from 'hono/cookie';
 import type { AuthRequest } from '@cloudflare/workers-oauth-provider';
 import { ERRORS } from '../errors';
-import type { Env } from '../types/task';
+import type { AppEnv, Env } from '../types/task';
 import { renderConsentPage } from './consent';
+import { ensureWebClient } from './webClient';
 import {
   CONSENT_COOKIE,
   STATE_COOKIE,
@@ -53,8 +54,8 @@ interface GithubUser {
   name: string | null;
 }
 
-export function createOAuthRoutes(options: OAuthRouteOptions = {}): Hono<{ Bindings: Env }> {
-  const route = new Hono<{ Bindings: Env }>();
+export function createOAuthRoutes(options: OAuthRouteOptions = {}): Hono<AppEnv> {
+  const route = new Hono<AppEnv>();
   const fetchImpl = options.fetch ?? fetch;
 
   /**
@@ -80,6 +81,32 @@ export function createOAuthRoutes(options: OAuthRouteOptions = {}): Hono<{ Bindi
       maxAge: STATE_TTL_SECONDS,
     }) as const;
 
+  /**
+   * The half of the flow that is the same however the user got here: remember
+   * the authorization request under a single-use token, bind that token to this
+   * browser with a signed cookie, and hand off to GitHub.
+   *
+   * Shared by the consent POST and by the first-party fast path, so the two
+   * cannot drift — and in particular so skipping the consent page can never
+   * mean skipping the state binding that protects the callback.
+   */
+  const toGithub = async (c: Context<AppEnv>, request: AuthRequest) => {
+    const url = new URL(c.req.url);
+    const token = newToken();
+    await putState(c.env.OAUTH_KV, token, request);
+    await setSignedCookie(c, STATE_COOKIE, token, c.env.COOKIE_ENCRYPTION_KEY, cookieOptions(url));
+
+    const github = new URL(GITHUB_AUTHORIZE);
+    github.searchParams.set('client_id', c.env.GITHUB_CLIENT_ID);
+    github.searchParams.set('redirect_uri', new URL('/callback', url).toString());
+    // The narrowest scope that still yields a login: no repositories, no email,
+    // no organisations. All this server needs is a name to attribute a grant to.
+    github.searchParams.set('scope', 'read:user');
+    github.searchParams.set('state', token);
+
+    return c.redirect(github.toString(), 302);
+  };
+
   route.get('/authorize', async (c) => {
     let request: AuthRequest;
     try {
@@ -94,6 +121,14 @@ export function createOAuthRoutes(options: OAuthRouteOptions = {}): Hono<{ Bindi
 
     const client = await c.env.OAUTH_PROVIDER.lookupClient(request.clientId);
     if (!client) return fail(ERRORS.OAUTH_INVALID_REQUEST, 400);
+
+    // The frontend asking for access to the frontend is not a delegation, and
+    // "Allow Batcave to access Batcave?" only teaches people to click through
+    // consent screens without reading them. Third-party clients still get the
+    // page; only this one, whose id this server issued itself, is waved past.
+    // Nothing else is skipped with it: `toGithub` still binds the state to this
+    // browser, which is what the callback actually checks.
+    if (request.clientId === (await ensureWebClient(c.env))) return toGithub(c, request);
 
     const nonce = newToken();
     const url = new URL(c.req.url);
@@ -140,20 +175,7 @@ export function createOAuthRoutes(options: OAuthRouteOptions = {}): Hono<{ Bindi
       return fail(ERRORS.OAUTH_INVALID_REQUEST, 400);
     }
 
-    const url = new URL(c.req.url);
-    const token = newToken();
-    await putState(c.env.OAUTH_KV, token, request);
-    await setSignedCookie(c, STATE_COOKIE, token, c.env.COOKIE_ENCRYPTION_KEY, cookieOptions(url));
-
-    const github = new URL(GITHUB_AUTHORIZE);
-    github.searchParams.set('client_id', c.env.GITHUB_CLIENT_ID);
-    github.searchParams.set('redirect_uri', new URL('/callback', url).toString());
-    // The narrowest scope that still yields a login: no repositories, no email,
-    // no organisations. All this server needs is a name to attribute a grant to.
-    github.searchParams.set('scope', 'read:user');
-    github.searchParams.set('state', token);
-
-    return c.redirect(github.toString(), 302);
+    return toGithub(c, request);
   });
 
   route.get('/callback', async (c) => {

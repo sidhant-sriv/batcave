@@ -1,3 +1,4 @@
+import type { Actor } from '../actor';
 import {
   acknowledgeNotification,
   advanceScheduleStatement,
@@ -99,11 +100,17 @@ export interface NotifyResult {
  * instance, and an instance that outlives its row simply finds nothing to do.
  *
  * Imports nothing from `agent/`, like `TaskService`.
+ *
+ * The only service that takes an `Actor` rather than a login, because it has
+ * the only caller that acts for nobody: the Workflow wakes on a schedule its
+ * user created hours or weeks earlier, with no request to carry an identity on,
+ * and passes `SYSTEM`. Every other construction names a person.
  */
 export class ScheduleService {
   constructor(
     private readonly db: D1Database,
     private readonly workflow: Workflow<ScheduleParams>,
+    private readonly owner: Actor,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -190,13 +197,15 @@ export class ScheduleService {
     // A retried tool call arrives with an id that may already be a schedule.
     // Returning it — rather than replacing again — is what stops a retry from
     // cancelling the very row it is retrying.
-    const existing = await selectSchedule(this.db, id);
+    const existing = await selectSchedule(this.db, id, this.owner);
     if (existing) {
       await this.ensureInstance(id);
       return { schedule: existing, replaced: null };
     }
 
-    const task = await selectTaskById(this.db, taskId);
+    // The ownership check for the whole scheduling path: a task that is not
+    // this caller's does not resolve, so there is nothing to hang a schedule on.
+    const task = await selectTaskById(this.db, taskId, this.owner);
     if (!task) throw new TaskNotFoundError(taskId);
     if (params.requireOpenTask && task.status === 'done') {
       throw new ScheduleValidationError(ERRORS.SCHEDULE_TASK_DONE);
@@ -217,7 +226,7 @@ export class ScheduleService {
 
     // One schedule per task. The partial unique index would refuse the insert
     // anyway; cancelling in the same batch is what turns that into a replace.
-    const replaced = await selectActiveScheduleForTask(this.db, taskId);
+    const replaced = await selectActiveScheduleForTask(this.db, taskId, this.owner);
     if (replaced) {
       await this.db.batch([
         cancelScheduleStatement(this.db, replaced.id, now),
@@ -270,7 +279,7 @@ export class ScheduleService {
   /** The tool's cancel: addressed by task, because that is what the model has. */
   async cancelForTask(taskId: string): Promise<Schedule> {
     const id = this.validTaskId(taskId);
-    const active = await selectActiveScheduleForTask(this.db, id);
+    const active = await selectActiveScheduleForTask(this.db, id, this.owner);
     if (!active) throw new ScheduleNotFoundError(id);
 
     return this.cancel(active.id);
@@ -279,7 +288,7 @@ export class ScheduleService {
   /** The REST cancel: addressed by schedule id. */
   async cancel(scheduleId: string): Promise<Schedule> {
     const id = this.validScheduleId(scheduleId);
-    const row = await cancelSchedule(this.db, id, this.now().toISOString());
+    const row = await cancelSchedule(this.db, id, this.now().toISOString(), this.owner);
     if (!row) throw new ScheduleNotFoundError(id);
 
     await this.terminate(id);
@@ -292,7 +301,12 @@ export class ScheduleService {
       throw new ScheduleValidationError(ERRORS.NOTIFICATION_ID_INVALID, parsed.error.issues);
     }
 
-    const row = await acknowledgeNotification(this.db, parsed.data, this.now().toISOString());
+    const row = await acknowledgeNotification(
+      this.db,
+      parsed.data,
+      this.now().toISOString(),
+      this.owner,
+    );
     if (!row) throw new NotificationNotFoundError(parsed.data);
     return row;
   }
@@ -305,7 +319,7 @@ export class ScheduleService {
       throw new ScheduleValidationError(ERRORS.INVALID_SCHEDULE_LIST, parsed.error.issues);
     }
 
-    return listSchedules(this.db, parsed.data);
+    return listSchedules(this.db, parsed.data, this.owner);
   }
 
   async listNotifications(
@@ -316,7 +330,7 @@ export class ScheduleService {
       throw new ScheduleValidationError(ERRORS.INVALID_NOTIFICATION_LIST, parsed.error.issues);
     }
 
-    return listNotifications(this.db, parsed.data);
+    return listNotifications(this.db, parsed.data, this.owner);
   }
 
   /**
@@ -325,7 +339,7 @@ export class ScheduleService {
    * that is no longer active stops the loop here.
    */
   async plan(scheduleId: string): Promise<PlanResult> {
-    const schedule = await selectSchedule(this.db, scheduleId);
+    const schedule = await selectSchedule(this.db, scheduleId, this.owner);
     if (!schedule || schedule.status !== 'active') return { stop: true };
 
     return { stop: false, nextAt: schedule.next_at };
@@ -339,11 +353,11 @@ export class ScheduleService {
    * reopened task without a notification explaining why it came back.
    */
   async notify(scheduleId: string, seq: number): Promise<NotifyResult> {
-    const schedule = await selectSchedule(this.db, scheduleId);
+    const schedule = await selectSchedule(this.db, scheduleId, this.owner);
     // Cancelled while the instance slept, and the terminate did not land.
     if (!schedule || schedule.status !== 'active') return { stop: true, outcome: 'ignored' };
 
-    const task = await selectTaskById(this.db, schedule.task_id);
+    const task = await selectTaskById(this.db, schedule.task_id, this.owner);
     // The task was deleted. The cascade removes the schedule with it, so this
     // is only reachable in a race; ending the loop is the honest response.
     if (!task) return { stop: true, outcome: 'ignored' };
@@ -382,7 +396,7 @@ export class ScheduleService {
       nextAt = next ? next.toISOString() : schedule.next_at;
       stop = status === 'ended';
 
-      if (!open) writes.push(reopenTaskStatement(this.db, task.id, at));
+      if (!open) writes.push(reopenTaskStatement(this.db, task.id, at, this.owner));
     }
 
     const notification: Notification = {

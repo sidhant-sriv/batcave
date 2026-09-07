@@ -20,6 +20,7 @@ const TODAY = '2026-09-05';
 
 const task = (over: Partial<Task> = {}): Task => ({
   id: 'a1',
+  user_id: 'octocat',
   title: 'Build the backend',
   description: null,
   status: 'todo',

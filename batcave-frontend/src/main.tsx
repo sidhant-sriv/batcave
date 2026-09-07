@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ApiError } from '@/api/client';
+import { AuthProvider } from '@/auth/AuthProvider';
 import { App } from '@/App';
 import '@/styles/theme.css';
 
@@ -30,12 +31,20 @@ const queryClient = new QueryClient({
   },
 });
 
+/*
+ * `AuthProvider` sits above the query client because a 401 is not a query
+ * failure to be retried — it is the session ending, and the whole shell is
+ * replaced rather than any one query being re-run. The client below never sees
+ * one it should act on: `api/client.ts` refreshes and retries first.
+ */
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </QueryClientProvider>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </QueryClientProvider>
+    </AuthProvider>
   </StrictMode>,
 );

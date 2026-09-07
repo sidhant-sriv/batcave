@@ -42,9 +42,19 @@ export class TaskNotFoundError extends Error {
  * generated ids and timestamps stay consistent. It validates on entry even
  * though callers already did, so it stays safe to call from anywhere, and it
  * imports nothing from `agent/`.
+ *
+ * Constructed with the login whose tasks it may touch, so no method can be
+ * called without having answered that question. There is no `SYSTEM` variant
+ * here on purpose: nothing in this codebase reads or writes a task without a
+ * person behind the request, and the one caller that comes close — the
+ * Workflow reopening a task its schedule fired on — goes through
+ * `ScheduleService`, which does take an `Actor`.
  */
 export class TaskService {
-  constructor(private readonly db: D1Database) {}
+  constructor(
+    private readonly db: D1Database,
+    private readonly owner: string,
+  ) {}
 
   /**
    * `opts.id` lets the agent supply an id derived from the tool call, so a
@@ -60,6 +70,7 @@ export class TaskService {
     const now = new Date().toISOString();
     const task: Task = {
       id: opts?.id ?? uuidv7(),
+      user_id: this.owner,
       title: parsed.data.title,
       description: parsed.data.description,
       status: 'todo',
@@ -73,7 +84,7 @@ export class TaskService {
   }
 
   async getById(id: string): Promise<Task | null> {
-    return selectTaskById(this.db, id);
+    return selectTaskById(this.db, id, this.owner);
   }
 
   /** Results carry the task's active schedule, so a caller can tell what notifies. */
@@ -85,7 +96,7 @@ export class TaskService {
       throw new TaskValidationError(ERRORS.INVALID_SEARCH_FILTERS, parsed.error.issues);
     }
 
-    return searchTasks(this.db, parsed.data);
+    return searchTasks(this.db, parsed.data, this.owner);
   }
 
   /** Throws TaskNotFoundError when the id does not exist. */
@@ -100,7 +111,15 @@ export class TaskService {
       throw new TaskValidationError(ERRORS.INVALID_TASK_INPUT, parsed.error.issues);
     }
 
-    const row = await updateTask(this.db, parsedId.data, parsed.data, new Date().toISOString());
+    // A task belonging to someone else matches nothing and is reported as
+    // missing, not forbidden: whether an id exists is not a stranger's business.
+    const row = await updateTask(
+      this.db,
+      parsedId.data,
+      parsed.data,
+      new Date().toISOString(),
+      this.owner,
+    );
     if (!row) {
       throw new TaskNotFoundError(parsedId.data);
     }

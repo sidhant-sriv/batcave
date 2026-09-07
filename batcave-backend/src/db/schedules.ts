@@ -1,3 +1,4 @@
+import type { Actor } from '../actor';
 import { ERRORS } from '../errors';
 import type {
   ListNotificationsFilters,
@@ -11,11 +12,23 @@ import type {
   ScheduleWithTask,
 } from '../types/schedule';
 import type { Task } from '../types/task';
+import { and, ownerClause, viaTaskClause } from './owner';
 
 /**
  * D1 access for the two tables a schedule is made of: the schedule itself, and
  * the notifications it has produced. Both live here because neither is useful
  * without the other, the same reasoning as `db/chats.ts`.
+ *
+ * NEITHER TABLE HAS AN OWNER COLUMN. Both already reference `tasks(id)` with a
+ * cascade, so the task is where ownership lives and every read here reaches it
+ * through `task_id`. Duplicating the login onto these rows would buy one
+ * subquery and cost a second copy that can disagree with the first.
+ *
+ * The three statement builders — insert, advance, insert-notification — are the
+ * exception and take no owner. Each one writes a row the calling method has
+ * already resolved through an owner-scoped read in the same call, and each is
+ * handed to `db.batch` where a subquery per statement would be paid for
+ * nothing.
  */
 
 /**
@@ -50,8 +63,16 @@ export async function insertSchedule(db: D1Database, schedule: Schedule): Promis
   return row;
 }
 
-export async function selectSchedule(db: D1Database, id: string): Promise<Schedule | null> {
-  const row = await db.prepare('SELECT * FROM schedules WHERE id = ?').bind(id).first<Schedule>();
+export async function selectSchedule(
+  db: D1Database,
+  id: string,
+  owner: Actor,
+): Promise<Schedule | null> {
+  const scope = viaTaskClause(owner);
+  const row = await db
+    .prepare(`SELECT * FROM schedules WHERE id = ?${and(scope)}`)
+    .bind(id, ...scope.binds)
+    .first<Schedule>();
   return row ?? null;
 }
 
@@ -59,10 +80,12 @@ export async function selectSchedule(db: D1Database, id: string): Promise<Schedu
 export async function selectActiveScheduleForTask(
   db: D1Database,
   taskId: string,
+  owner: Actor,
 ): Promise<Schedule | null> {
+  const scope = viaTaskClause(owner);
   const row = await db
-    .prepare(`SELECT * FROM schedules WHERE task_id = ? AND status = 'active'`)
-    .bind(taskId)
+    .prepare(`SELECT * FROM schedules WHERE task_id = ? AND status = 'active'${and(scope)}`)
+    .bind(taskId, ...scope.binds)
     .first<Schedule>();
   return row ?? null;
 }
@@ -82,15 +105,17 @@ export async function cancelSchedule(
   db: D1Database,
   id: string,
   at: string,
+  owner: Actor,
 ): Promise<Schedule | null> {
+  const scope = viaTaskClause(owner);
   const row = await db
     .prepare(
       `UPDATE schedules
           SET status = 'cancelled', ended_at = ?
-        WHERE id = ? AND status = 'active'
+        WHERE id = ? AND status = 'active'${and(scope)}
       RETURNING *`,
     )
-    .bind(at, id)
+    .bind(at, id, ...scope.binds)
     .first<Schedule>();
   return row ?? null;
 }
@@ -153,15 +178,17 @@ export async function acknowledgeNotification(
   db: D1Database,
   id: string,
   at: string,
+  owner: Actor,
 ): Promise<Notification | null> {
+  const scope = viaTaskClause(owner);
   const row = await db
     .prepare(
       `UPDATE notifications
           SET acknowledged_at = ?
-        WHERE id = ? AND acknowledged_at IS NULL
+        WHERE id = ? AND acknowledged_at IS NULL${and(scope)}
       RETURNING *`,
     )
-    .bind(at, id)
+    .bind(at, id, ...scope.binds)
     .first<Notification>();
   return row ?? null;
 }
@@ -175,6 +202,7 @@ export async function acknowledgeNotification(
  */
 const TASK_COLUMNS = [
   't.id AS t_id',
+  't.user_id AS t_user_id',
   't.title AS t_title',
   't.description AS t_description',
   't.status AS t_status',
@@ -189,6 +217,7 @@ type TaskColumns = { [K in keyof Task as `t_${K}`]: Task[K] };
 function splitTask<T>(row: T & TaskColumns): T & { task: Task } {
   const {
     t_id,
+    t_user_id,
     t_title,
     t_description,
     t_status,
@@ -203,6 +232,7 @@ function splitTask<T>(row: T & TaskColumns): T & { task: Task } {
     ...(rest as unknown as T),
     task: {
       id: t_id,
+      user_id: t_user_id,
       title: t_title,
       description: t_description,
       status: t_status,
@@ -218,10 +248,16 @@ function splitTask<T>(row: T & TaskColumns): T & { task: Task } {
 export async function listSchedules(
   db: D1Database,
   filters: ListSchedulesFilters,
+  owner: Actor,
 ): Promise<{ schedules: ScheduleWithTask[]; truncated: boolean }> {
-  const where = filters.status?.length
-    ? `WHERE s.status IN (${filters.status.map(() => '?').join(', ')})`
-    : '';
+  const scope = ownerClause(owner, 't.user_id');
+  const clauses = [
+    ...(scope.sql ? [scope.sql] : []),
+    ...(filters.status?.length
+      ? [`s.status IN (${filters.status.map(() => '?').join(', ')})`]
+      : []),
+  ];
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const { results } = await db
     .prepare(
@@ -232,7 +268,7 @@ export async function listSchedules(
         ORDER BY s.next_at ASC, s.id ASC
         LIMIT ?`,
     )
-    .bind(...(filters.status ?? []), filters.limit + 1)
+    .bind(...scope.binds, ...(filters.status ?? []), filters.limit + 1)
     .all<Schedule & TaskColumns>();
 
   const rows = results.map(splitTask);
@@ -246,11 +282,16 @@ export async function listSchedules(
 export async function listNotifications(
   db: D1Database,
   filters: ListNotificationsFilters,
+  owner: Actor,
 ): Promise<{ notifications: NotificationWithTask[]; truncated: boolean }> {
-  const where =
-    filters.acknowledged === undefined
-      ? ''
-      : `WHERE n.acknowledged_at IS ${filters.acknowledged ? 'NOT NULL' : 'NULL'}`;
+  const scope = ownerClause(owner, 't.user_id');
+  const clauses = [
+    ...(scope.sql ? [scope.sql] : []),
+    ...(filters.acknowledged === undefined
+      ? []
+      : [`n.acknowledged_at IS ${filters.acknowledged ? 'NOT NULL' : 'NULL'}`]),
+  ];
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const { results } = await db
     .prepare(
@@ -261,7 +302,7 @@ export async function listNotifications(
         ORDER BY n.acknowledged_at IS NOT NULL, n.notified_at DESC, n.id DESC
         LIMIT ?`,
     )
-    .bind(filters.limit + 1)
+    .bind(...scope.binds, filters.limit + 1)
     .all<Notification & TaskColumns>();
 
   const rows = results.map(splitTask);

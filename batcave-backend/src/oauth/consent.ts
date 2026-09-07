@@ -106,7 +106,7 @@ export function renderConsentPage({
         </div>
       </form>
 
-      <p class="mono foot">Batcave is a demo. Everyone who signs in shares one task list.</p>
+      <p class="mono foot">Batcave is a demo. This client sees the tasks on your account, and no one else's.</p>
     </main>
   </body>
 </html>`;

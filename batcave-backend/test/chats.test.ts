@@ -14,18 +14,20 @@ import {
   ChatValidationError,
   titleFrom,
 } from '../src/services/chatService';
-import type { Env } from '../src/types/task';
+import type { AppEnv } from '../src/types/task';
+import { OWNER, asUser } from './helpers/auth';
 import { send, startChat } from './helpers/chat';
 import { resetDb } from './helpers/reset';
 import { ScriptedModel, type ScriptStep } from './helpers/scriptedModel';
 
 beforeEach(resetDb);
 
-const service = () => new ChatService(env.DB);
+const service = () => new ChatService(env.DB, OWNER);
 
 /** Real turns, so the tests below run against checkpoints the agent wrote. */
 function agentApp(script: ScriptStep[]) {
-  const app = new Hono<{ Bindings: Env }>();
+  const app = new Hono<AppEnv>();
+  app.use('*', asUser());
   app.route('/api/chats', createChatRoute({ model: new ScriptedModel(script) }));
   app.onError(onError);
   return app;
@@ -47,7 +49,7 @@ describe('creating a chat', () => {
 
     expect(chat.title).toBeNull();
     expect(chat.turn_count).toBe(0);
-    expect(await selectActiveThread(env.DB, chat.id)).toBe(threadId);
+    expect(await selectActiveThread(env.DB, chat.id, OWNER)).toBe(threadId);
   });
 
   it('keeps the public handle and the checkpoint key separate', async () => {
@@ -235,7 +237,7 @@ describe('deleting', () => {
     expect(await countRows('checkpoints', threadId)).toBe(0);
     expect(await countRows('writes', threadId)).toBe(0);
     expect(await countRows('agent_runs', threadId)).toBe(0);
-    expect(await selectActiveThread(env.DB, chat.id)).toBeNull();
+    expect(await selectActiveThread(env.DB, chat.id, OWNER)).toBeNull();
     await expect(chats.get(chat.id)).rejects.toThrow(ChatNotFoundError);
   });
 
@@ -292,7 +294,7 @@ describe('the chat endpoints', () => {
   const request = async (
     path: string,
     init: RequestInit = {},
-    instance: Hono<{ Bindings: Env }> = app(),
+    instance: Hono<AppEnv> = app(),
   ): Promise<{ status: number; body: Body }> => {
     const response = await instance.request(path, init, env);
     const text = await response.text();
@@ -344,7 +346,7 @@ describe('the chat endpoints', () => {
   });
 
   describe('renaming', () => {
-    const patch = (id: string, body: unknown, instance?: Hono<{ Bindings: Env }>) =>
+    const patch = (id: string, body: unknown, instance?: Hono<AppEnv>) =>
       request(
         `/api/chats/${id}`,
         {
@@ -375,7 +377,7 @@ describe('the chat endpoints', () => {
   });
 
   describe('deleting', () => {
-    const remove = (id: string, instance?: Hono<{ Bindings: Env }>) =>
+    const remove = (id: string, instance?: Hono<AppEnv>) =>
       request(`/api/chats/${id}`, { method: 'DELETE' }, instance);
 
     it('answers 204 and the conversation stops existing', async () => {

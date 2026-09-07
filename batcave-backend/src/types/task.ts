@@ -9,6 +9,12 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
 export interface Task {
   id: string;
+  /**
+   * The GitHub login this task belongs to. Returned to the caller rather than
+   * stripped: it is only ever their own login, and a row that quietly hides
+   * who it belongs to is harder to reason about than one that says so.
+   */
+  user_id: string;
   title: string;
   description: string | null;
   status: TaskStatus;
@@ -36,6 +42,26 @@ export interface TaskScheduleSummary {
  * "which of these are scheduled" without a query per row.
  */
 export type TaskWithSchedule = Task & { schedule: TaskScheduleSummary | null };
+
+/**
+ * Who is calling, resolved from the bearer token by `requireUser` and put on
+ * the Hono context. `login` is the GitHub login, which is also what every
+ * `user_id` column holds.
+ */
+export interface SessionUser {
+  login: string;
+  name: string | null;
+}
+
+/**
+ * The Hono generic every router in this app is built on. Naming it once is what
+ * keeps `c.get('user')` typed in every route rather than in the ones that
+ * remembered to spell the generic out.
+ */
+export interface AppEnv {
+  Bindings: Env;
+  Variables: { user: SessionUser };
+}
 
 /** Bindings and secrets available on the Worker environment. */
 export interface Env {

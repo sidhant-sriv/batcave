@@ -7,10 +7,10 @@ The agent creates, searches and updates tasks, runs a bounded tool loop, and
 remembers the conversation server-side. Conversations are full CRUD; tasks have
 no delete yet.
 
-The same six capabilities are also served over [MCP](#mcp) at `/mcp`, behind an
-OAuth 2.1 authorization server with GitHub sign-in, so any MCP client can drive
-the task list. The REST API stays unauthenticated — see [MCP → Why only `/mcp`
-is protected](#why-only-mcp-is-protected).
+The same six capabilities are also served over [MCP](#mcp) at `/mcp`, so any MCP
+client can drive the task list. Both surfaces sit behind one OAuth 2.1
+authorization server with GitHub sign-in, and every task and conversation
+belongs to the login that created it — see [Authorization](#authorization).
 
 ## Stack
 
@@ -37,11 +37,15 @@ arguments, which are validated by the same Zod schemas the REST routes use.
 
 ```
 REST       ──► Zod ────────────────────────┐
+MCP        ──► Zod ────────────────────────┤
                                            ├─► TaskService ─► db/tasks.ts ─► D1 (tasks)
-chats ─► ChatGroq ─► tool call ─► Zod ─────┘
-  │           └───► CloudflareD1Saver ─────────────────────► D1 (checkpoints, writes)
-  │           └───► agent_runs claim ───────────────────────► D1 (agent_runs)
+chats ─► ChatGroq ─► tool call ─► Zod ─────┘        │
+  │           └───► CloudflareD1Saver ──────────────┼──────► D1 (checkpoints, writes)
+  │           └───► agent_runs claim ───────────────┼──────► D1 (agent_runs)
   └───► ChatService ─────────────────────► db/chats.ts ────► D1 (chats, chat_threads)
+
+Every service is constructed with the login it acts for, and every statement
+in db/ carries it. The Workflow is the one caller that passes SYSTEM instead.
 ```
 
 The checkpointer is the one exception to "`db/tasks.ts` is the only file that
@@ -51,19 +55,29 @@ A **chat** is the conversation a client holds a handle to; a **thread** is the
 LangGraph checkpoint partition it runs on. `chat_threads` maps one to the other,
 one row per chat today. They are kept apart so that compaction can move a chat
 onto a fresh thread without the client's handle changing, and so ownership has
-somewhere to live when auth arrives. `ChatService` is the only thing that knows
-which thread a chat is on; callers deal in chat ids.
+somewhere to live — which it now does, as `chats.user_id`. `ChatService` is the
+only thing that knows which thread a chat is on; callers deal in chat ids.
 
 ```
 src/
-├── index.ts                       Hono app, routing, error mapping
+├── index.ts                       Hono app, routing, error mapping, OAuthProvider
 ├── ids.ts                         uuidv7() and derivedUuid()
+├── actor.ts                       Actor: a login, or SYSTEM for the Workflow
+├── origins.ts                     CORS_ORIGINS: allowlist and OAuth redirect URIs
+├── middleware/auth.ts             requireUser: bearer to c.get('user')
 ├── routes/
 │   ├── tasks.ts                   REST: POST, GET (filtered), GET /:id, PATCH
 │   ├── searchParams.ts            query-string bag to filter object
+│   ├── auth.ts                    /api/auth: config (open) and me
 │   └── chat.ts                    /api/chats: turns, claims, takeover, history
+├── oauth/
+│   ├── github.ts                  /authorize, /callback, the GitHub round trip
+│   ├── webClient.ts               the frontend, registered as a public client
+│   ├── consent.ts                 the consent page, for third-party clients
+│   └── state.ts                   single-use state tokens in KV
+├── mcp/                           server.ts, handler.ts, result.ts
 ├── agent/
-│   ├── agent.ts                   buildAgent(env), recursion limit, thread config
+│   ├── agent.ts                   buildAgent(env, owner), recursion limit, config
 │   ├── model.ts                   ChatGroq construction
 │   ├── prompt.ts                  system prompt, rebuilt per model call
 │   ├── state.ts                   agent state: the messages channel and reducer
@@ -82,6 +96,7 @@ src/
 │   ├── taskService.ts             Single source of truth for reads and writes
 │   └── chatService.ts             Conversations: chats, their threads, history
 ├── db/
+│   ├── owner.ts                   the ownership predicate, spelled once
 │   ├── tasks.ts                   Task SQL, including buildSearchQuery()
 │   ├── chats.ts                   chats and chat_threads SQL
 │   └── agentState.ts              agent_runs SQL, pruning, thread deletion
@@ -94,7 +109,9 @@ src/
 migrations/
 ├── 0001_create_tasks.sql
 ├── 0002_agent_state.sql           checkpoints, writes, agent_runs
-└── 0003_chats.sql                 chats, chat_threads, backfill from agent_runs
+├── 0003_chats.sql                 chats, chat_threads, backfill from agent_runs
+├── 0004_schedules.sql             schedules, notifications
+└── 0005_ownership.sql             user_id on tasks and chats, owner-first indexes
 ```
 
 ## Setup
@@ -327,13 +344,15 @@ cross-origin. `/api/*` is wrapped in `hono/cors` with an allowlist read from the
 "vars": { "CORS_ORIGINS": "http://localhost:5173,https://batcave-frontend.pages.dev" }
 ```
 
-Allowlisted rather than `*` because `Idempotency-Key` is a non-simple header:
-the browser preflights any turn that sends one, and a wildcard would not name
-it. The request's own origin is echoed back, so the response stays cacheable per
+Allowlisted rather than `*` because `Idempotency-Key` and `Authorization` are
+non-simple headers: the browser preflights any request that sends one, and a
+wildcard would not name them. The request's own origin is echoed back, so the response stays cacheable per
 origin. An origin that is not listed simply gets no `Access-Control-Allow-Origin`
 header, which the browser turns into a blocked request.
 
 Add the Pages URL here and redeploy the Worker after the first `pages deploy`.
+The same var decides the frontend's registered OAuth redirect URIs
+(`<origin>/auth/callback`), so an origin only has to be named once.
 
 ### Errors
 
@@ -432,6 +451,12 @@ client → POST /mcp                     401 + WWW-Authenticate: resource_metada
        → GET  /callback                → code        ┘
        → POST /oauth/token             access token
        → POST /mcp  + Bearer           tools
+
+browser → GET  /api/auth/config        client id + endpoints, the one open route
+        → GET  /authorize              → github.com   (consent skipped, see below)
+        → GET  /callback               → code
+        → POST /oauth/token            access token + refresh token
+        → GET  /api/tasks + Bearer     tasks
 ```
 
 Who guards what:
@@ -447,26 +472,85 @@ Both cookies are `HttpOnly`, `SameSite=Lax`, ten minutes, and `Secure` on
 https. On `http://localhost` they are not `Secure`, which Safari needs; Chrome
 and Firefox treat localhost as secure either way.
 
-### Why only `/mcp` is protected
+### Two doors, one lock
 
-The REST API under `/api` is open, and that is deliberate rather than
-overlooked. The frontend has no accounts, so authenticating it is a different
-project with a different data model — tasks would need an owner. The MCP
-endpoint is the one a stranger with a client could otherwise reach, so that is
-where the door is. Everyone who signs in shares one task list.
+Everything under `/api` is closed too, but guarded by `requireUser`
+(`src/middleware/auth.ts`) inside the Hono app rather than by the library's
+`apiRoute`. Both check the same tokens with the same `unwrapToken`; the split is
+about what a caller gets when the check fails. The library answers `OPTIONS` on
+anything it guards with `Access-Control-Allow-Origin` echoing whatever origin
+asked, which would replace the deliberate allowlist above, and its 401 body is
+RFC 9728 discovery — right for an MCP client, unreadable by the frontend's
+`ApiError`. `/health` and the OAuth endpoints are the only open routes, plus
+`/api/auth/config`, which exists because a browser with no token has to find out
+where to get one.
+
+### The frontend as a client
+
+The web app is a public client of this same server: no secret, PKCE only. It is
+registered on first use by `ensureWebClient` (`src/oauth/webClient.ts`), with a
+redirect URI per `CORS_ORIGINS` entry, and its generated id is remembered in
+`OAUTH_KV`. So there is no client id to configure anywhere — the frontend reads
+one from `/api/auth/config`, and the GitHub OAuth app needs no new callback URL
+because it only ever redirects to this Worker.
+
+Consent is skipped for that one client and shown to every other. "Allow Batcave
+to access Batcave?" is not a delegation anyone can meaningfully refuse, and
+asking teaches people to click through consent screens without reading them.
+Nothing else is skipped with it: the state token is still parked in KV and bound
+to the browser by a signed cookie, which is what the callback actually checks.
+
+**Bearer tokens rather than a session cookie**, because the frontend is on
+`pages.dev` and this Worker on `workers.dev`. Both are on the public suffix
+list, so those are separate sites and a session cookie between them would need
+`SameSite=None` — which Safari blocks. The access token lives in memory and the
+refresh token in `localStorage`, where any script on that origin can read it;
+that is the real cost of a cross-site API, and a same-origin deployment serving
+the frontend from this Worker could use an `HttpOnly` cookie instead and be
+strictly safer.
+
+### Ownership
+
+`tasks.user_id` and `chats.user_id` hold the GitHub login. `schedules` and
+`notifications` have no column of their own: both already reference
+`tasks(id) ON DELETE CASCADE`, so the task is where ownership lives and the
+queries reach it through `task_id`.
+
+There is no `users` table. The OAuth grant is already the user registry —
+`completeAuthorization` stores the login as its `userId` — and a copy in D1
+could only go stale.
+
+Scoping is structural rather than a review habit. Every function in `src/db/`
+that touches an owned row takes the owner as a required argument, and every
+service is constructed with it, so a query that forgets to scope itself does not
+compile. `ScheduleService` is the only one that accepts a `SYSTEM` symbol
+instead of a login, for its only caller with nobody behind it: the Workflow,
+which wakes hours or weeks after the request that created its schedule.
+
+A task belonging to someone else answers 404, never 403. Whether an id exists is
+not a stranger's business.
 
 ### Local development
 
 Register a GitHub OAuth app with a callback of `http://localhost:8787/callback`,
-then fill in `.dev.vars` from `.dev.vars.example`. Check the challenge:
+then fill in `.dev.vars` from `.dev.vars.example`. Check both doors:
 
 ```sh
+curl -i http://localhost:8787/api/tasks
+# HTTP/1.1 401 Unauthorized
+# WWW-Authenticate: Bearer realm="batcave", scope="tasks"
+# {"error":"Sign in to use this API"}
+
 curl -i -X POST http://localhost:8787/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 # HTTP/1.1 401 Unauthorized
 # WWW-Authenticate: Bearer …resource_metadata="http://localhost:8787/.well-known/oauth-protected-resource/mcp"
 ```
+
+The port matters: the redirect URI the Worker sends to GitHub is derived from
+the request, so a dev server that lands on a port other than 8787 gets
+`redirect_uri_mismatch` until that port is registered too.
 
 ## How the agent behaves
 
@@ -501,6 +585,7 @@ bun run db:query:local "SELECT run_key, status, attempts, message FROM agent_run
 | Column        | Notes                                        |
 | ------------- | -------------------------------------------- |
 | `id`          | UUID; v7 from REST, v8 derived from the tool call for the agent |
+| `user_id`     | the owner's GitHub login; see [Ownership](#ownership) |
 | `title`       | required, 1–200 chars                        |
 | `description` | optional; blank strings stored as `NULL`     |
 | `status`      | `todo` \| `in_progress` \| `done`            |
@@ -546,9 +631,31 @@ The remote resources are already provisioned:
 - Worker `batcave-backend` created, with `GROQ_API_KEY` uploaded as a secret
 
 ```sh
-bun run db:migrate:remote   # 0002 has not been applied remotely yet
+bun run db:migrate:remote   # migrate before deploying, not after
 bun run deploy
 ```
+
+Order matters from `0005` on: the Worker's queries name `user_id`, so deploying
+first leaves every request referencing a column that is not there yet.
+
+### Claiming the pre-auth rows (one-off, per deployment)
+
+`0005` adds the owner column and backfills nothing, so tasks and chats created
+before there were accounts have a null owner and belong to no one — the
+fail-closed half of that migration's design. On a fresh database there is
+nothing to do. On a database with data predating auth, hand it to a login once:
+
+```sh
+bunx wrangler d1 execute batcave-db --remote \
+  --command "UPDATE tasks SET user_id = 'your-github-login' WHERE user_id IS NULL;
+             UPDATE chats SET user_id = 'your-github-login' WHERE user_id IS NULL;"
+```
+
+Deliberately not in the migration. Which account owns one deployment's history
+is a fact about that deployment, not about the shape of the database, and a
+migration that hardcodes a GitHub login is one every fork of this repository
+would inherit. Sign in first and check `GET /api/auth/me` for the exact login
+before running it — a typo here strands the rows rather than failing loudly.
 
 Rotate the key with `bunx wrangler secret put GROQ_API_KEY`.
 
@@ -572,11 +679,13 @@ database.
   newest three per thread, which costs no history.
 - **Strict concurrency** — the run claim bounds it, but its TTL is the weak
   point. Moving the graph into a Durable Object is the structural fix.
-- **Auth for `/api`** — `/mcp` has OAuth; the REST API does not, because the
-  frontend has no accounts. Giving it some means an owner column: `chats` is
-  where a `user_id` belongs, every other table reaches it through `chat_id`,
-  and the MCP tools would then filter by the `login` already on
-  `getMcpAuthContext().props` instead of ignoring it.
+- **Deleting an account** — nothing removes a user's rows. `DELETE FROM tasks
+  WHERE user_id = ?` cascades to schedules and notifications; chats need the
+  checkpoints and run rows gone first, which `ChatService.remove` already does
+  per chat. The running Workflow instances would need terminating too.
+- **Per-account settings** — there is no `users` table, on purpose: the OAuth
+  grant is the registry. The first thing that genuinely belongs to a person
+  rather than to a device is what should create one.
 - **Streaming** — deliberately not built: turns land in a couple of seconds, so
   a response-based client is fine. If it is ever wanted, `streamSSE` from
   `hono/streaming` plus `agent.stream(state, config)` covers it, and the last

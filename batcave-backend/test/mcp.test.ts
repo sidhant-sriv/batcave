@@ -7,6 +7,7 @@ import type { Task } from '../src/types/task';
 import { callTool, rpc } from './helpers/mcp';
 import { dbFailingOn } from './helpers/db';
 import { fakeWorkflow } from './helpers/workflow';
+import { OWNER } from './helpers/auth';
 import { resetDb } from './helpers/reset';
 
 /**
@@ -21,7 +22,7 @@ import { resetDb } from './helpers/reset';
 
 beforeEach(resetDb);
 
-const service = () => new TaskService(env.DB);
+const service = () => new TaskService(env.DB, OWNER);
 
 /** A week out: comfortably future, and inside the service's one-year horizon. */
 const soon = () => new Date(Date.now() + 7 * 86_400_000).toISOString();
@@ -36,6 +37,7 @@ async function seed(rows: Array<Partial<Task> & { title: string }>): Promise<Tas
     created.push(
       await insertTask(env.DB, {
         id: crypto.randomUUID(),
+        user_id: OWNER,
         description: null,
         status: 'todo',
         priority: 'medium',

@@ -1,11 +1,12 @@
-import { SELF, env } from 'cloudflare:test';
+import { env } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { insertTask } from '../src/db/tasks';
 import { TaskNotFoundError, TaskService, TaskValidationError } from '../src/services/taskService';
 import type { Task } from '../src/types/task';
+import { OWNER, api } from './helpers/auth';
 import { resetDb } from './helpers/reset';
 
-const service = () => new TaskService(env.DB);
+const service = () => new TaskService(env.DB, OWNER);
 
 beforeEach(resetDb);
 
@@ -17,6 +18,7 @@ async function seed(rows: Array<Partial<Task> & { title: string }>): Promise<Tas
     created.push(
       await insertTask(env.DB, {
         id: crypto.randomUUID(),
+        user_id: OWNER,
         description: null,
         status: 'todo',
         priority: 'medium',
@@ -204,7 +206,7 @@ describe('TaskService.search — schedules', () => {
     const [reminded] = await seed([{ title: 'Renew the domain' }, { title: 'Buy milk' }]);
     await schedule(reminded!.id);
 
-    const body = await json(await SELF.fetch('https://test/api/tasks?scheduled=true'));
+    const body = await json(await api('/api/tasks?scheduled=true'));
     expect(body.tasks).toHaveLength(1);
     expect(body.tasks[0].title).toBe('Renew the domain');
     expect(body.tasks[0].schedule.next_at).toBe('2026-09-11T09:00:00.000Z');
@@ -251,7 +253,7 @@ describe('TaskService.update', () => {
 
 describe('REST', () => {
   it('creates and reads back a task', async () => {
-    const created = await SELF.fetch('https://test/api/tasks', {
+    const created = await api('/api/tasks', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'Renew the domain', priority: 'high' }),
@@ -259,7 +261,7 @@ describe('REST', () => {
     expect(created.status).toBe(201);
     const { task } = await json(created);
 
-    const fetched = await SELF.fetch(`https://test/api/tasks/${task.id}`);
+    const fetched = await api(`/api/tasks/${task.id}`);
     expect(fetched.status).toBe(200);
     expect((await json(fetched)).task.title).toBe('Renew the domain');
   });
@@ -270,7 +272,7 @@ describe('REST', () => {
       { title: 'Buy milk', status: 'done' },
     ]);
 
-    const response = await SELF.fetch('https://test/api/tasks?status=todo,in_progress&query=cloudflare');
+    const response = await api('/api/tasks?status=todo,in_progress&query=cloudflare');
     const body = await json(response);
 
     expect(response.status).toBe(200);
@@ -279,7 +281,7 @@ describe('REST', () => {
   });
 
   it('rejects a malformed filter with 400', async () => {
-    const response = await SELF.fetch('https://test/api/tasks?status=archived');
+    const response = await api('/api/tasks?status=archived');
     expect(response.status).toBe(400);
     expect((await json(response)).issues).toBeDefined();
   });
@@ -287,7 +289,7 @@ describe('REST', () => {
   it('patches a task and reports 404 for an unknown one', async () => {
     const [task] = await seed([{ title: 'Ship it' }]);
 
-    const patched = await SELF.fetch(`https://test/api/tasks/${task!.id}`, {
+    const patched = await api(`/api/tasks/${task!.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ status: 'done', priority: 'high' }),
@@ -295,7 +297,7 @@ describe('REST', () => {
     expect(patched.status).toBe(200);
     expect((await json(patched)).task.status).toBe('done');
 
-    const missing = await SELF.fetch(`https://test/api/tasks/${crypto.randomUUID()}`, {
+    const missing = await api(`/api/tasks/${crypto.randomUUID()}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ status: 'done' }),
@@ -305,7 +307,7 @@ describe('REST', () => {
 
   it('rejects an empty patch body with 400', async () => {
     const [task] = await seed([{ title: 'Ship it' }]);
-    const response = await SELF.fetch(`https://test/api/tasks/${task!.id}`, {
+    const response = await api(`/api/tasks/${task!.id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: '{}',

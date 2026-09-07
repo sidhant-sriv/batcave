@@ -53,6 +53,9 @@ export const ERRORS = {
   SCHEDULE_INSERT_NO_ROW: 'Insert did not return the created schedule',
   NOTIFICATION_INSERT_NO_ROW: 'Insert did not return the notification',
 
+  UNAUTHORIZED: 'Sign in to use this API',
+  AUTH_TOKEN_INVALID: 'That access token is expired or not valid',
+
   OAUTH_INVALID_REQUEST: 'Invalid authorization request',
   OAUTH_CONSENT_EXPIRED: 'That consent form expired. Start the connection again.',
   OAUTH_STATE_INVALID: 'This sign-in did not start in this browser. Start again.',
@@ -61,6 +64,7 @@ export const ERRORS = {
   GITHUB_USER_FAILED: 'Could not read your GitHub account',
 
   MCP_TOOL_UNAVAILABLE: 'The tool could not run. This is a fault on our side, not your request.',
+  MCP_MISSING_IDENTITY: 'Grant carries no GitHub login',
 
   AUDIO_REQUIRED: 'No audio was sent',
   AUDIO_TOO_LARGE: 'Audio must be under 8 MB',

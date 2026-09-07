@@ -5,7 +5,8 @@ import { buildAgent, threadConfig } from '../src/agent/agent';
 import { DEFAULT_MODEL } from '../src/agent/model';
 import { onError } from '../src/index';
 import { createChatRoute } from '../src/routes/chat';
-import type { Env } from '../src/types/task';
+import type { AppEnv, Env } from '../src/types/task';
+import { OWNER, asUser } from './helpers/auth';
 import { resetDb } from './helpers/reset';
 
 beforeEach(resetDb);
@@ -48,7 +49,7 @@ const failingGroq = (status: number, body: unknown) =>
 describe('what reaches Groq', () => {
   it('sends the tools, the configured model and one-tool-call-at-a-time', async () => {
     const { requests, fetchImpl } = cannedGroq();
-    const agent = buildAgent(env, { fetch: fetchImpl });
+    const agent = buildAgent(env, OWNER, { fetch: fetchImpl });
 
     await agent.invoke(
       { messages: [{ role: 'user', content: 'hello' }] },
@@ -72,7 +73,7 @@ describe('what reaches Groq', () => {
 
   it('puts today into the system prompt', async () => {
     const { requests, fetchImpl } = cannedGroq();
-    const agent = buildAgent(env, { fetch: fetchImpl });
+    const agent = buildAgent(env, OWNER, { fetch: fetchImpl });
 
     await agent.invoke(
       { messages: [{ role: 'user', content: 'hello' }] },
@@ -85,7 +86,7 @@ describe('what reaches Groq', () => {
 
   it('describes create_task with the fields the service accepts', async () => {
     const { requests, fetchImpl } = cannedGroq();
-    const agent = buildAgent(env, { fetch: fetchImpl });
+    const agent = buildAgent(env, OWNER, { fetch: fetchImpl });
 
     await agent.invoke(
       { messages: [{ role: 'user', content: 'hello' }] },
@@ -100,13 +101,14 @@ describe('what reaches Groq', () => {
 
 describe('when Groq fails', () => {
   const app = (fetchImpl: typeof fetch) => {
-    const instance = new Hono<{ Bindings: Env }>();
+    const instance = new Hono<AppEnv>();
+    instance.use('*', asUser());
     instance.route('/api/chat', createChatRoute({ fetch: fetchImpl }));
     instance.onError(onError);
     return instance;
   };
 
-  const ask = (instance: Hono<{ Bindings: Env }>) =>
+  const ask = (instance: Hono<AppEnv>) =>
     instance.request(
       '/api/chat',
       {

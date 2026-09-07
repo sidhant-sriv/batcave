@@ -1,16 +1,17 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { ERRORS } from '../errors';
 import { listNotificationsSchema } from '../schemas/schedule';
 import { ScheduleService } from '../services/scheduleService';
-import type { Env } from '../types/task';
+import type { AppEnv } from '../types/task';
 
 /**
  * The inbox: every time a schedule fired. Written only by the Workflow, read
  * and acknowledged here.
  */
-export const notificationsRoute = new Hono<{ Bindings: Env }>();
+export const notificationsRoute = new Hono<AppEnv>();
 
-const service = (env: Env) => new ScheduleService(env.DB, env.TASK_SCHEDULE);
+const service = (c: Context<AppEnv>) =>
+  new ScheduleService(c.env.DB, c.env.TASK_SCHEDULE, c.get('user').login);
 
 notificationsRoute.get('/', async (c) => {
   const acknowledged = c.req.query('acknowledged');
@@ -24,7 +25,7 @@ notificationsRoute.get('/', async (c) => {
     return c.json({ error: ERRORS.INVALID_NOTIFICATION_LIST, issues: parsed.error.issues }, 400);
   }
 
-  const { notifications, truncated } = await service(c.env).listNotifications(parsed.data);
+  const { notifications, truncated } = await service(c).listNotifications(parsed.data);
   return c.json({ notifications, truncated });
 });
 
@@ -34,6 +35,6 @@ notificationsRoute.get('/', async (c) => {
  * nobody was there to read.
  */
 notificationsRoute.post('/:id/acknowledge', async (c) => {
-  const notification = await service(c.env).acknowledge(c.req.param('id'));
+  const notification = await service(c).acknowledge(c.req.param('id'));
   return c.json({ notification });
 });

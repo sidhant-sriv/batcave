@@ -31,10 +31,14 @@ export interface AgentOptions {
  *
  * Middleware order is outermost first. `escalate` is last so it sits closest to
  * the tool and classifies what the tool itself raised.
+ *
+ * `owner` is positional and required rather than another field on
+ * `AgentOptions`, which exists for test injection and is routinely omitted: the
+ * login the tools act as is not the kind of thing that should have a default.
  */
-export function buildAgent(env: Env, options: AgentOptions = {}) {
-  const tasks = new TaskService(env.DB);
-  const schedules = new ScheduleService(env.DB, env.TASK_SCHEDULE);
+export function buildAgent(env: Env, owner: string, options: AgentOptions = {}) {
+  const tasks = new TaskService(env.DB, owner);
+  const schedules = new ScheduleService(env.DB, env.TASK_SCHEDULE, owner);
 
   return createAgent({
     model: options.model ?? makeModel(env, options.fetch),

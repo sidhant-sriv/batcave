@@ -7,6 +7,7 @@ import {
   CircleDot,
   Info,
   ListChecks,
+  LogOut,
   MessageSquare,
   Moon,
   Sun,
@@ -14,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { listTasks } from '@/api/tasks';
+import { useAuth } from '@/auth/AuthProvider';
 import { IconButton } from '@/components/primitives/Button';
 import { ALL_TASKS_FILTERS, VIEWS, countsOf, type ViewId } from '@/lib/views';
 import { useDueNowCount } from '@/lib/schedules';
@@ -72,6 +74,7 @@ export function Navigator({
   onNavigate,
 }: Props) {
   const [theme, setTheme] = useTheme();
+  const { user, signOut } = useAuth();
   const [searchParams] = useSearchParams();
   const { pathname } = useLocation();
   const dueNow = useDueNowCount();
@@ -106,12 +109,28 @@ export function Navigator({
   );
 
   /*
-   * The account menu's slot. There is no auth, so there is nothing to put in
-   * it — but the footer's geometry is decided now rather than discovered later.
+   * Who is signed in, and the way out.
+   *
+   * A button rather than a menu behind an avatar. There is exactly one account
+   * action, and hiding one item behind a disclosure is two clicks to do the
+   * only thing the disclosure contains. The login rides along in the tooltip so
+   * the rail, which has no room for a name, still answers "who am I".
    */
   const accountSlot = (
-    <div aria-hidden className="size-[26px] shrink-0 rounded-full border border-dashed border-hairline" />
+    <IconButton title={`Sign out${user ? ` (${user.login})` : ''}`} onClick={() => void signOut()}>
+      <LogOut size={16} strokeWidth={1.5} />
+    </IconButton>
   );
+
+  /** Expanded and sheet have the width to say it outright. */
+  const whoami = user ? (
+    <span
+      title={user.login}
+      className="min-w-0 flex-1 truncate font-mono text-micro lowercase text-disabled"
+    >
+      {user.login}
+    </span>
+  ) : null;
 
   if (rail) {
     return (
@@ -177,6 +196,7 @@ export function Navigator({
 
         {touch ? (
           <span className="ml-auto flex items-center gap-[var(--space-2)]">
+            {whoami}
             {themeToggle}
             {accountSlot}
           </span>
@@ -248,7 +268,8 @@ export function Navigator({
         </NavLink>
 
         {touch ? null : (
-          <span className="ml-auto flex items-center gap-[var(--space-2)]">
+          <span className="ml-auto flex min-w-0 items-center gap-[var(--space-2)]">
+            {whoami}
             {themeToggle}
             {accountSlot}
           </span>
