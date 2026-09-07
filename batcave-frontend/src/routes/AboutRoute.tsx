@@ -1,4 +1,7 @@
 import { Info } from 'lucide-react';
+import { SchemaDiagram } from '@/components/about/SchemaDiagram';
+import { SystemDiagram } from '@/components/about/SystemDiagram';
+import { TurnDiagram } from '@/components/about/TurnDiagram';
 import { NavToggle } from '@/components/nav/NavToggle';
 import { cn } from '@/lib/cn';
 
@@ -11,11 +14,15 @@ import { cn } from '@/lib/cn';
  * overstate it every time someone scans the list.
  *
  * Its reader is someone assessing the project, so it answers their questions in
- * their order: what is this, why does it exist, what is it made of, what is
- * worth looking at in the code, and where is the code. Everything here is
- * either true of the running system or a bracketed blank. Nothing on an About
- * page is worth inventing: a wrong version string is read as fact by whoever
- * reads it next.
+ * their order: what is this, how is it put together, what is worth looking at
+ * in the code, and where is the code. Three diagrams carry most of that,
+ * because the shape of a system is the part prose is worst at: a paragraph
+ * describing four callers converging on one service layer takes longer to read
+ * than the picture and is still less convincing.
+ *
+ * Everything here is either true of the running system or a bracketed blank.
+ * Nothing on an About page is worth inventing: a wrong version string is read
+ * as fact by whoever reads it next.
  */
 
 const REPO = 'https://github.com/sidhant-sriv/batcave';
@@ -23,6 +30,7 @@ const REPO = 'https://github.com/sidhant-sriv/batcave';
 const STACK: Array<[string, React.ReactNode]> = [
   ['Frontend', 'React 19, Vite, TanStack Query, Tailwind 4, on Cloudflare Pages'],
   ['API', 'Hono on Cloudflare Workers'],
+  ['MCP', 'Remote MCP server on the same Worker, behind OAuth 2.1 with GitHub sign-in'],
   ['Data', 'Cloudflare D1, with migrations'],
   ['Scheduling', 'Cloudflare Workflows, one instance per schedule'],
   ['Agent', 'LangGraph, with a Groq-hosted model'],
@@ -30,21 +38,23 @@ const STACK: Array<[string, React.ReactNode]> = [
 ];
 
 /**
- * The four decisions worth a reviewer's time — the ones where the obvious
- * implementation is the wrong one. Each is checkable in the source.
+ * The decisions worth a reviewer's time — the ones where the obvious
+ * implementation is the wrong one, and which the diagrams above cannot show
+ * because each is a rule rather than a shape. Every one is checkable in the
+ * source.
  */
 const NOTES: Array<[string, string]> = [
   [
-    'One turn at a time, safely retried',
-    'A turn is atomic: the whole tool loop runs on the Worker and returns one response. Each attempt mints an idempotency key and reuses it across retries, so retrying a timeout returns the stored answer or resumes the interrupted run rather than asking the model the same thing twice. A second concurrent turn is refused with a 409, not queued.',
-  ],
-  [
-    'History lives on the server',
-    'Conversation state is a LangGraph checkpoint in D1, so a reload resumes a conversation rather than replaying it from the client. Listing conversations never decodes a checkpoint: the turn count is denormalised onto the row precisely so the list stays one cheap read.',
+    'The agent cannot invent a task id',
+    'A middleware refuses any tool call carrying a task id the model did not first see in a search or create result on that same thread. A model that guesses gets an error it can recover from, rather than a write to somebody else’s row.',
   ],
   [
     'The schedule row is the source of truth',
     'Each schedule is a Workflow instance, but the instance carries only its id and re-reads the row at every step. Cancelling or replacing a schedule is therefore a D1 write and never a message to a running instance. A firing that lands on a finished task reopens it, and that is recorded rather than inferred.',
+  ],
+  [
+    'The agent is not the only way in',
+    'The same six capabilities are served over the Model Context Protocol at /mcp, so any MCP client can drive the task list. It is stateless, per the 2026-07-28 revision, so it needs no Durable Object. Access is an OAuth 2.1 authorization server on the same Worker: the library issues tokens and enforces PKCE, and this Worker owns consent, the GitHub round trip, and the single-use state that binds the callback to the browser that started it.',
   ],
   [
     'The client states what the API can actually do',
@@ -58,7 +68,10 @@ const SOURCE: Array<[string, React.ReactNode]> = [
     'Live',
     <Link key="live" href="https://batcave-frontend.pages.dev/tasks" label="batcave-frontend.pages.dev" />,
   ],
-  ['Prompt history', '[LINK — the prompts this was built with]'],
+  ['MCP endpoint', 'https://batcave-backend.sidhant-sriv.workers.dev/mcp'],
+  // Committed alongside the code rather than linked out, so the prompts and the
+  // commits they produced can be read against each other.
+  ['Prompt history', 'In the repository — every prompt this was built with, in order'],
 ];
 
 const AUTHOR: Array<[string, React.ReactNode]> = [
@@ -67,6 +80,9 @@ const AUTHOR: Array<[string, React.ReactNode]> = [
   ['Background', '[ONE OR TWO LINES FROM YOUR RESUME]'],
   ['Links', '[RESUME / LINKEDIN / EMAIL]'],
 ];
+
+/** Prose stays at a readable measure; only the diagrams use the full column. */
+const PROSE = 'max-w-[600px]';
 
 export function AboutRoute() {
   return (
@@ -83,8 +99,8 @@ export function AboutRoute() {
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex max-w-[640px] flex-col gap-[var(--space-8)] p-[var(--space-6)] pb-[var(--space-16)]">
-          <section className="flex flex-col gap-[var(--space-3)]">
+        <div className="flex max-w-[768px] flex-col gap-[var(--space-8)] p-[var(--space-6)] pb-[var(--space-16)]">
+          <section className={cn(PROSE, 'flex flex-col gap-[var(--space-3)]')}>
             <h2 className="font-prose text-display text-primary">Batcave</h2>
             <p className="font-prose text-body text-secondary text-pretty">
               A task list you can talk to. Tasks are the record; the console beside them is an agent
@@ -98,20 +114,25 @@ export function AboutRoute() {
             </p>
           </section>
 
-          <Section label="How a turn works">
-            Your message goes out, the whole tool loop runs on the Worker, and one response comes
-            back carrying the prose and every tool that ran. Conversation history is checkpointed
-            server-side, so a reload resumes where you left off and a conversation is linkable.
-          </Section>
+          <Figure label="How it fits together">
+            <SystemDiagram />
+          </Figure>
+
+          <Figure label="What one turn does">
+            <TurnDiagram />
+          </Figure>
+
+          <Figure label="What is in the database">
+            <SchemaDiagram />
+          </Figure>
 
           <Section label="Schedules">
             A schedule always belongs to one task, and a task has at most one. Recurring schedules
-            are five-field cron in UTC; a one-shot fires once. Every firing is recorded, and one
-            that lands on a finished task reopens it. There is no form for creating them — "every
-            Monday" is language, and turning language into a cron is the agent's job.
+            are five-field cron in UTC; a one-shot fires once. There is no form for creating them —
+            "every Monday" is language, and turning language into a cron is the agent's job.
           </Section>
 
-          <section className="flex flex-col gap-[var(--space-4)]">
+          <section className={cn(PROSE, 'flex flex-col gap-[var(--space-4)]')}>
             <h3 className="font-mono text-micro uppercase text-disabled">Worth a look</h3>
 
             {NOTES.map(([title, body]) => (
@@ -131,9 +152,19 @@ export function AboutRoute() {
   );
 }
 
+/** A diagram under a heading. The caption belongs to the figure, not here. */
+function Figure({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col gap-[var(--space-4)]">
+      <h3 className="font-mono text-micro uppercase text-disabled">{label}</h3>
+      {children}
+    </section>
+  );
+}
+
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <section className="flex flex-col gap-[var(--space-3)]">
+    <section className={cn(PROSE, 'flex flex-col gap-[var(--space-3)]')}>
       <h3 className="font-mono text-micro uppercase text-disabled">{label}</h3>
       <p className="font-prose text-body-sm text-secondary text-pretty">{children}</p>
     </section>
@@ -142,7 +173,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 
 function Facts({ label, rows }: { label: string; rows: Array<[string, React.ReactNode]> }) {
   return (
-    <section className="flex flex-col">
+    <section className={cn(PROSE, 'flex flex-col')}>
       <h3 className="pb-[var(--space-2)] font-mono text-micro uppercase text-disabled">{label}</h3>
 
       <dl className="flex flex-col">

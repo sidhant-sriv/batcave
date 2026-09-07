@@ -3,7 +3,11 @@
   "name": "batcave-backend",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-04",
-  "compatibility_flags": ["nodejs_compat"],
+  // `global_fetch_strictly_public` is required by the OAuth provider before it
+  // will advertise Client ID Metadata Documents: it stops an outbound fetch of
+  // a client's metadata URL from resolving to something inside the zone, which
+  // is the SSRF this feature would otherwise open.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "observability": {
     "enabled": true
   },
@@ -15,6 +19,15 @@
       "migrations_dir": "migrations"
     }
   ],
+  // Grants, tokens and clients for the MCP server's OAuth provider. The binding
+  // name is the library's, not ours.
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "d86e3949fb4740249b9931b10765ffdd"
+    }
+  ],
+
   "workflows": [
     {
       "name": "batcave-task-schedule",

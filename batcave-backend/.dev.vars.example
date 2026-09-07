@@ -1,1 +1,11 @@
 GROQ_API_KEY=
+
+# The GitHub OAuth app that identifies whoever connects an MCP client.
+# Register one at Settings -> Developer settings, with a callback URL of
+# <origin>/callback for each origin you run on.
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+
+# Signs the two short-lived cookies the consent flow sets. Any long random
+# string: `openssl rand -hex 32`.
+COOKIE_ENCRYPTION_KEY=

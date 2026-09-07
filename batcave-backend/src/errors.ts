@@ -53,6 +53,15 @@ export const ERRORS = {
   SCHEDULE_INSERT_NO_ROW: 'Insert did not return the created schedule',
   NOTIFICATION_INSERT_NO_ROW: 'Insert did not return the notification',
 
+  OAUTH_INVALID_REQUEST: 'Invalid authorization request',
+  OAUTH_CONSENT_EXPIRED: 'That consent form expired. Start the connection again.',
+  OAUTH_STATE_INVALID: 'This sign-in did not start in this browser. Start again.',
+  GITHUB_DENIED: 'GitHub sign-in was cancelled',
+  GITHUB_EXCHANGE_FAILED: 'Could not complete GitHub sign-in',
+  GITHUB_USER_FAILED: 'Could not read your GitHub account',
+
+  MCP_TOOL_UNAVAILABLE: 'The tool could not run. This is a fault on our side, not your request.',
+
   AUDIO_REQUIRED: 'No audio was sent',
   AUDIO_TOO_LARGE: 'Audio must be under 8 MB',
   TRANSCRIBE_EMPTY: 'Nothing was said',

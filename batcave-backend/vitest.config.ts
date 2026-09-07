@@ -23,6 +23,11 @@ export default defineConfig(async () => {
           bindings: {
             TEST_MIGRATIONS: migrations,
             GROQ_API_KEY: 'test-key-not-used',
+            // The OAuth flow is exercised with a stubbed GitHub, so these only
+            // have to exist and be stable.
+            GITHUB_CLIENT_ID: 'test-github-client',
+            GITHUB_CLIENT_SECRET: 'test-github-secret',
+            COOKIE_ENCRYPTION_KEY: 'test-cookie-key-0123456789abcdef',
           },
         },
       }),

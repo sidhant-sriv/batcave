@@ -5,7 +5,12 @@ over Groq for the natural-language endpoint.
 
 The agent creates, searches and updates tasks, runs a bounded tool loop, and
 remembers the conversation server-side. Conversations are full CRUD; tasks have
-no delete yet, and there is no auth or user management.
+no delete yet.
+
+The same six capabilities are also served over [MCP](#mcp) at `/mcp`, behind an
+OAuth 2.1 authorization server with GitHub sign-in, so any MCP client can drive
+the task list. The REST API stays unauthenticated — see [MCP → Why only `/mcp`
+is protected](#why-only-mcp-is-protected).
 
 ## Stack
 
@@ -18,6 +23,8 @@ no delete yet, and there is no auth or user management.
 | Agent           | LangGraph via `langchain`'s `createAgent`         |
 | LLM             | Groq, through `@langchain/groq`                   |
 | Conversation    | D1 checkpointer (`langgraph-checkpoint-cloudflare-d1`) |
+| MCP             | `@modelcontextprotocol/server` via `agents/mcp/server` |
+| OAuth           | `@cloudflare/workers-oauth-provider` (binding `OAUTH_KV`) |
 | Package manager | Bun                                               |
 | Local dev       | Wrangler                                          |
 | Tests           | Vitest on `@cloudflare/vitest-pool-workers`       |
@@ -343,6 +350,124 @@ Add the Pages URL here and redeploy the Worker after the first `pages deploy`.
 A turn that hits the round limit is still a `200`: the reply says it could not
 finish and `actions` lists what did run.
 
+## MCP
+
+`/mcp` is a remote [Model Context Protocol](https://modelcontextprotocol.io)
+server speaking the 2026-07-28 revision. It offers the same six tools the
+in-app agent has, plus three read-only resources, to any MCP client.
+
+```sh
+claude mcp add --transport http batcave https://batcave-backend.<account>.workers.dev/mcp
+```
+
+The first call opens a browser: a consent page, then GitHub, then back. After
+that the client holds a token and the tools are available.
+
+### What it offers
+
+| Tool | Hints | Does |
+| --- | --- | --- |
+| `create_task` | — | Creates a task |
+| `search_tasks` | read-only | Filters by keyword, status, priority, due date, whether it is scheduled |
+| `update_task` | idempotent | Changes any field; `null` clears `description` or `due_date` |
+| `schedule_reminder` | idempotent | One notification at an absolute time |
+| `schedule_recurring` | idempotent | Five-field cron in UTC, no more often than every 15 minutes |
+| `cancel_schedule` | destructive | Ends a task's schedule |
+
+| Resource | Holds |
+| --- | --- |
+| `batcave://tasks/open` | Every task not yet done, with each one's schedule |
+| `batcave://tasks/{id}` | One task and its active schedule |
+| `batcave://schedules/upcoming` | Active schedules and when each next fires |
+
+Tools act, resources are context. A client that wants to reason about the list
+reads a resource; a client that wants to change it calls a tool.
+
+### The server is stateless
+
+The 2026-07-28 revision dropped the `initialize` handshake and session ids:
+every request carries its own protocol version and capabilities. So there is no
+Durable Object here and no `McpAgent` — the services, the MCP server and the
+handler are all built per request, exactly like the REST routes, and
+`src/mcp/handler.ts` is a plain `fetch`.
+
+### Two things the agent has that MCP does not
+
+**`taskIdGuard`.** The agent refuses a task id the model never saw in a search
+result on that thread, because there the conversation and the tool calls are
+one process. Over MCP the conversation lives in the client and the server sees
+one call at a time, so there is no thread to check against. The services still
+reject a malformed id and a row that is not there.
+
+**Exactly-once creates.** The agent derives a task's primary key from
+LangChain's `toolCallId`, so a retried tool call upserts. MCP has no per-call
+identifier a server may trust — JSON-RPC ids are chosen by the client and
+restart at 1 each session — so `create_task` mints a `uuidv7()` and is
+at-least-once under client retry.
+
+### Errors
+
+A tool handler cannot signal "this call did not happen" by throwing: the SDK
+catches it and returns the message as an `isError` result. So `src/mcp/result.ts`
+keeps the classification `src/agent/tools/envelope.ts` uses and changes the
+action — a caller's mistake comes back with the service's own message, and
+anything else is logged and answered with a generic refusal. Resource reads are
+the other half: there a throw is right, because `ResourceNotFoundError` maps
+onto the JSON-RPC error the protocol defines for a URI that is not there.
+
+## Authorization
+
+`/mcp` sits behind an OAuth 2.1 authorization server
+(`@cloudflare/workers-oauth-provider`). The library owns token issuance, PKCE,
+client registration and the discovery documents; this Worker owns the part the
+library cannot do, which is deciding who the user is.
+
+```
+client → POST /mcp                     401 + WWW-Authenticate: resource_metadata=…
+       → /.well-known/oauth-protected-resource/mcp
+       → /.well-known/oauth-authorization-server
+       → POST /oauth/register          (or a Client ID Metadata Document)
+       → GET  /authorize               consent page  ┐ ours
+       → POST /authorize               → github.com  │ src/oauth/github.ts
+       → GET  /callback                → code        ┘
+       → POST /oauth/token             access token
+       → POST /mcp  + Bearer           tools
+```
+
+Who guards what:
+
+| Property | Owner |
+| --- | --- |
+| PKCE, redirect-URI matching, single-use codes, hashed tokens, encrypted grant props, TTLs | library |
+| Consent CSRF: a signed nonce cookie double-submitted with the form | ours |
+| Upstream state: 256 random bits, parked in KV, deleted on read, paired with a signed cookie so the browser that returns is the one that left | ours |
+| Least privilege: GitHub `read:user` only; the GitHub token is used once and never stored | ours |
+
+Both cookies are `HttpOnly`, `SameSite=Lax`, ten minutes, and `Secure` on
+https. On `http://localhost` they are not `Secure`, which Safari needs; Chrome
+and Firefox treat localhost as secure either way.
+
+### Why only `/mcp` is protected
+
+The REST API under `/api` is open, and that is deliberate rather than
+overlooked. The frontend has no accounts, so authenticating it is a different
+project with a different data model — tasks would need an owner. The MCP
+endpoint is the one a stranger with a client could otherwise reach, so that is
+where the door is. Everyone who signs in shares one task list.
+
+### Local development
+
+Register a GitHub OAuth app with a callback of `http://localhost:8787/callback`,
+then fill in `.dev.vars` from `.dev.vars.example`. Check the challenge:
+
+```sh
+curl -i -X POST http://localhost:8787/mcp \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+# HTTP/1.1 401 Unauthorized
+# WWW-Authenticate: Bearer …resource_metadata="http://localhost:8787/.well-known/oauth-protected-resource/mcp"
+```
+
 ## How the agent behaves
 
 - **Bounded loop.** At most 5 tool rounds per turn, enforced by LangGraph's
@@ -447,8 +572,11 @@ database.
   newest three per thread, which costs no history.
 - **Strict concurrency** — the run claim bounds it, but its TTL is the weak
   point. Moving the graph into a Durable Object is the structural fix.
-- **Auth** — Hono middleware in `index.ts`, ahead of the route mounts. `chats`
-  is where a `user_id` belongs; every other table reaches it through `chat_id`.
+- **Auth for `/api`** — `/mcp` has OAuth; the REST API does not, because the
+  frontend has no accounts. Giving it some means an owner column: `chats` is
+  where a `user_id` belongs, every other table reaches it through `chat_id`,
+  and the MCP tools would then filter by the `login` already on
+  `getMcpAuthContext().props` instead of ignoring it.
 - **Streaming** — deliberately not built: turns land in a couple of seconds, so
   a response-based client is fine. If it is ever wanted, `streamSSE` from
   `hono/streaming` plus `agent.stream(state, config)` covers it, and the last
